@@ -60,6 +60,8 @@ Inputs:
 - `crop_info`: JSON metadata from Draw BBox `crop_info` output
 - `strip_padding`: default `true`; removes padding added to make ComfyUI image batches same size
 - `resize_to_bbox`: default `true`; resizes each crop to its original bbox size before pasting
+- `feather_radius`: default `0`; feather radius in pixels around the pasted crop edge, `0` disables feathering
+- `feather_strength`: default `1.0`; feather blend strength from `0.0` to `1.0`; higher values make the crop edge more transparent and softer
 
 Output:
 

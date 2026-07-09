@@ -2,7 +2,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -528,7 +528,29 @@ def _target_box_from_info(info: Dict[str, Any], image_width: int, image_height: 
     return ix1, iy1, ix2, iy2
 
 
-def _paste_clipped(base: Image.Image, patch: Image.Image, x: int, y: int) -> None:
+def _make_edge_feather_mask(size: Tuple[int, int], radius: int, strength: float) -> Optional[Image.Image]:
+    width, height = size
+    radius_px = max(0, int(radius or 0))
+    strength_value = max(0.0, min(1.0, float(strength or 0.0)))
+    if width <= 0 or height <= 0 or radius_px <= 0 or strength_value <= 0.0:
+        return None
+
+    x_dist = np.minimum(np.arange(width, dtype=np.float32), np.arange(width - 1, -1, -1, dtype=np.float32))
+    y_dist = np.minimum(np.arange(height, dtype=np.float32), np.arange(height - 1, -1, -1, dtype=np.float32))
+    edge_dist = np.minimum(y_dist[:, None], x_dist[None, :])
+    fade = np.clip(edge_dist / float(radius_px), 0.0, 1.0)
+    alpha = (1.0 - strength_value) + strength_value * fade
+    mask = np.clip(np.round(alpha * 255.0), 0, 255).astype(np.uint8)
+    return Image.fromarray(mask, mode="L")
+
+
+def _paste_clipped(
+    base: Image.Image,
+    patch: Image.Image,
+    x: int,
+    y: int,
+    mask: Optional[Image.Image] = None,
+) -> None:
     left = max(0, -x)
     top = max(0, -y)
     right = min(patch.width, base.width - x)
@@ -539,8 +561,13 @@ def _paste_clipped(base: Image.Image, patch: Image.Image, x: int, y: int) -> Non
 
     if left != 0 or top != 0 or right != patch.width or bottom != patch.height:
         patch = patch.crop((left, top, right, bottom))
+        if mask is not None:
+            mask = mask.crop((left, top, right, bottom))
 
-    base.paste(patch.convert("RGB"), (x + left, y + top))
+    if mask is not None:
+        base.paste(patch.convert("RGB"), (x + left, y + top), mask.convert("L"))
+    else:
+        base.paste(patch.convert("RGB"), (x + left, y + top))
 
 
 class DeepSeekOCRDrawBBox:
@@ -775,6 +802,8 @@ class DeepSeekOCRPasteBBoxCrops:
                 "crop_info": ("STRING", {"forceInput": True}),
                 "strip_padding": ("BOOLEAN", {"default": True}),
                 "resize_to_bbox": ("BOOLEAN", {"default": True}),
+                "feather_radius": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "feather_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
             }
         }
 
@@ -790,6 +819,8 @@ class DeepSeekOCRPasteBBoxCrops:
         crop_info: Any,
         strip_padding: bool = True,
         resize_to_bbox: bool = True,
+        feather_radius: int = 0,
+        feather_strength: float = 1.0,
     ):
         original_batch = _normalize_image_batch(original_image)
         crop_batch = _normalize_image_batch(crop_images)
@@ -801,6 +832,11 @@ class DeepSeekOCRPasteBBoxCrops:
 
         should_strip_padding = _to_bool(strip_padding)
         should_resize = _to_bool(resize_to_bbox)
+        feather_radius_px = max(0, int(feather_radius or 0))
+        try:
+            feather_strength_value = max(0.0, min(1.0, float(feather_strength or 0.0)))
+        except Exception:
+            feather_strength_value = 0.0
         count = min(len(infos), int(crop_batch.shape[0]))
 
         for crop_index in range(count):
@@ -823,7 +859,8 @@ class DeepSeekOCRPasteBBoxCrops:
             if should_resize and crop.size != (target_w, target_h):
                 crop = _resize_image(crop, (target_w, target_h))
 
-            _paste_clipped(base, crop, x1, y1)
+            mask = _make_edge_feather_mask(crop.size, feather_radius_px, feather_strength_value)
+            _paste_clipped(base, crop, x1, y1, mask)
 
         return (torch.stack([_pil_to_tensor(img, original_image.device) for img in output_pils], dim=0),)
 
