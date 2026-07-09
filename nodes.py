@@ -1,4 +1,5 @@
 ﻿import ast
+import json
 import os
 import re
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -40,6 +41,14 @@ def _as_text(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return "\n".join(_as_text(v) for v in value)
     return str(value)
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _is_number(value: Any) -> bool:
@@ -212,6 +221,26 @@ def _scale_value(value: float, length: int, coord_base: int) -> int:
     return max(0, min(max(0, length - 1), scaled))
 
 
+def _scale_crop_start(value: float, length: int, coord_base: int) -> int:
+    if length <= 0:
+        return 0
+    if coord_base and coord_base > 0:
+        scaled = int(round(float(value) * float(length) / float(coord_base)))
+    else:
+        scaled = int(round(float(value)))
+    return max(0, min(length - 1, scaled))
+
+
+def _scale_crop_end(value: float, length: int, coord_base: int) -> int:
+    if length <= 0:
+        return 0
+    if coord_base and coord_base > 0:
+        scaled = int(round(float(value) * float(length) / float(coord_base)))
+    else:
+        scaled = int(round(float(value)))
+    return max(0, min(length, scaled))
+
+
 def _scaled_rect(box: Sequence[float], width: int, height: int, coord_base: int) -> Tuple[int, int, int, int]:
     x1, y1, x2, y2 = [float(v) for v in box[:4]]
     px1 = _scale_value(x1, width, coord_base)
@@ -225,8 +254,58 @@ def _scaled_rect(box: Sequence[float], width: int, height: int, coord_base: int)
     return px1, py1, px2, py2
 
 
+def _scaled_crop_rect_from_values(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    width: int,
+    height: int,
+    coord_base: int,
+) -> Tuple[int, int, int, int]:
+    if x1 > x2:
+        x1, x2 = x2, x1
+    if y1 > y2:
+        y1, y2 = y2, y1
+
+    px1 = _scale_crop_start(x1, width, coord_base)
+    py1 = _scale_crop_start(y1, height, coord_base)
+    px2 = _scale_crop_end(x2, width, coord_base)
+    py2 = _scale_crop_end(y2, height, coord_base)
+
+    if px2 <= px1:
+        px2 = min(width, px1 + 1)
+    if py2 <= py1:
+        py2 = min(height, py1 + 1)
+
+    return px1, py1, px2, py2
+
+
+def _scaled_crop_rect(box: Sequence[float], width: int, height: int, coord_base: int) -> Tuple[int, int, int, int]:
+    x1, y1, x2, y2 = [float(v) for v in box[:4]]
+    return _scaled_crop_rect_from_values(x1, y1, x2, y2, width, height, coord_base)
+
+
 def _scaled_points(points: Iterable[Tuple[float, float]], width: int, height: int, coord_base: int) -> List[Tuple[int, int]]:
     return [(_scale_value(x, width, coord_base), _scale_value(y, height, coord_base)) for x, y in points]
+
+
+def _annotation_crop_rect(
+    annotation: Dict[str, Any],
+    width: int,
+    height: int,
+    coord_base: int,
+) -> Tuple[int, int, int, int]:
+    if annotation.get("type") == "rect":
+        box = annotation.get("box", [0, 0, 0, 0])
+        return _scaled_crop_rect(box, width, height, coord_base)
+
+    points = annotation.get("points", [])
+    if not points:
+        return (0, 0, 1, 1)
+    xs = [float(p[0]) for p in points]
+    ys = [float(p[1]) for p in points]
+    return _scaled_crop_rect_from_values(min(xs), min(ys), max(xs), max(ys), width, height, coord_base)
 
 
 def _draw_label(
@@ -298,8 +377,145 @@ def _pil_to_tensor(image: Image.Image, device: torch.device) -> torch.Tensor:
     return torch.from_numpy(arr).to(device=device)
 
 
+def _normalize_image_batch(image: torch.Tensor) -> torch.Tensor:
+    if image.ndim == 3:
+        return image.unsqueeze(0)
+    if image.ndim == 4:
+        return image
+    raise ValueError(f"Unsupported IMAGE tensor shape: {tuple(image.shape)}")
+
+
+def _empty_crop_batch(device: torch.device) -> torch.Tensor:
+    return torch.zeros((1, 1, 1, 3), dtype=torch.float32, device=device)
+
+
+def _crops_to_batch(
+    crops: List[Image.Image],
+    crop_infos: List[Dict[str, Any]],
+    device: torch.device,
+    padding_color: Tuple[int, int, int] = (0, 0, 0),
+) -> torch.Tensor:
+    if not crops:
+        return _empty_crop_batch(device)
+
+    max_w = max(max(1, crop.width) for crop in crops)
+    max_h = max(max(1, crop.height) for crop in crops)
+
+    tensors: List[torch.Tensor] = []
+    for crop, info in zip(crops, crop_infos):
+        info["canvas_size"] = [max_w, max_h]
+        canvas = Image.new("RGB", (max_w, max_h), padding_color)
+        canvas.paste(crop.convert("RGB"), (0, 0))
+        tensors.append(_pil_to_tensor(canvas, device))
+
+    return torch.stack(tensors, dim=0)
+
+
+def _parse_crop_info(crop_info: Any) -> List[Dict[str, Any]]:
+    if isinstance(crop_info, list):
+        return [dict(item) for item in crop_info if isinstance(item, dict)]
+    if isinstance(crop_info, dict):
+        return [crop_info]
+
+    text = _as_text(crop_info).strip()
+    if not text:
+        return []
+
+    try:
+        data = json.loads(text)
+    except Exception:
+        try:
+            data = ast.literal_eval(text)
+        except Exception:
+            return []
+
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return [dict(item) for item in data if isinstance(item, dict)]
+    return []
+
+
+def _resize_image(image: Image.Image, size: Tuple[int, int]) -> Image.Image:
+    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.BICUBIC)
+    return image.resize(size, resampling)
+
+
+def _strip_padding_from_crop(crop: Image.Image, info: Dict[str, Any]) -> Image.Image:
+    crop_size = info.get("crop_size") or [crop.width, crop.height]
+    canvas_size = info.get("canvas_size") or [crop.width, crop.height]
+
+    try:
+        original_crop_w = max(1, int(round(float(crop_size[0]))))
+        original_crop_h = max(1, int(round(float(crop_size[1]))))
+        original_canvas_w = max(1, int(round(float(canvas_size[0]))))
+        original_canvas_h = max(1, int(round(float(canvas_size[1]))))
+    except Exception:
+        return crop
+
+    content_w = int(round(crop.width * original_crop_w / original_canvas_w))
+    content_h = int(round(crop.height * original_crop_h / original_canvas_h))
+    content_w = max(1, min(crop.width, content_w))
+    content_h = max(1, min(crop.height, content_h))
+    return crop.crop((0, 0, content_w, content_h))
+
+
+def _target_box_from_info(info: Dict[str, Any], image_width: int, image_height: int) -> Tuple[int, int, int, int]:
+    box = info.get("box") or [0, 0, 1, 1]
+    try:
+        x1, y1, x2, y2 = [float(v) for v in box[:4]]
+    except Exception:
+        return (0, 0, 1, 1)
+
+    source_size = info.get("source_size") or [image_width, image_height]
+    try:
+        source_w = float(source_size[0])
+        source_h = float(source_size[1])
+    except Exception:
+        source_w = float(image_width)
+        source_h = float(image_height)
+
+    if source_w > 0 and source_h > 0:
+        x1 = x1 * image_width / source_w
+        x2 = x2 * image_width / source_w
+        y1 = y1 * image_height / source_h
+        y2 = y2 * image_height / source_h
+
+    ix1 = int(round(min(x1, x2)))
+    iy1 = int(round(min(y1, y2)))
+    ix2 = int(round(max(x1, x2)))
+    iy2 = int(round(max(y1, y2)))
+
+    ix1 = max(0, min(max(0, image_width - 1), ix1))
+    iy1 = max(0, min(max(0, image_height - 1), iy1))
+    ix2 = max(0, min(image_width, ix2))
+    iy2 = max(0, min(image_height, iy2))
+
+    if ix2 <= ix1:
+        ix2 = min(image_width, ix1 + 1)
+    if iy2 <= iy1:
+        iy2 = min(image_height, iy1 + 1)
+
+    return ix1, iy1, ix2, iy2
+
+
+def _paste_clipped(base: Image.Image, patch: Image.Image, x: int, y: int) -> None:
+    left = max(0, -x)
+    top = max(0, -y)
+    right = min(patch.width, base.width - x)
+    bottom = min(patch.height, base.height - y)
+
+    if right <= left or bottom <= top:
+        return
+
+    if left != 0 or top != 0 or right != patch.width or bottom != patch.height:
+        patch = patch.crop((left, top, right, bottom))
+
+    base.paste(patch.convert("RGB"), (x + left, y + top))
+
+
 class DeepSeekOCRDrawBBox:
-    """Draw DeepSeek OCR bounding boxes on a ComfyUI IMAGE tensor."""
+    """Draw DeepSeek OCR bounding boxes and crop the bbox regions."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -317,8 +533,8 @@ class DeepSeekOCRDrawBBox:
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
+    RETURN_TYPES = ("IMAGE", "IMAGE", "STRING")
+    RETURN_NAMES = ("image", "crop_images", "crop_info")
     FUNCTION = "draw_bbox"
     CATEGORY = "DeepSeek OCR"
 
@@ -341,37 +557,51 @@ class DeepSeekOCRDrawBBox:
         coord_base = int(coord_base) if coord_base is not None else 1000
         font = _load_font(font_path, int(label_font_size)) if label and label != "none" else ImageFont.load_default()
 
-        if image.ndim == 3:
-            batch = image.unsqueeze(0)
-        elif image.ndim == 4:
-            batch = image
-        else:
-            raise ValueError(f"Unsupported IMAGE tensor shape: {tuple(image.shape)}")
+        batch = _normalize_image_batch(image)
 
         output_images: List[torch.Tensor] = []
-        for img in batch:
-            pil_image = _tensor_image_to_pil(img)
+        crop_images: List[Image.Image] = []
+        crop_infos: List[Dict[str, Any]] = []
+
+        for image_index, img in enumerate(batch):
+            source_pil = _tensor_image_to_pil(img)
+            pil_image = source_pil.copy()
             draw = ImageDraw.Draw(pil_image)
             img_w, img_h = pil_image.size
 
-            for ann in annotations:
-                if ann.get("type") == "rect":
-                    x1, y1, x2, y2 = _scaled_rect(ann.get("box", [0, 0, 0, 0]), img_w, img_h, coord_base)
-                    draw.rectangle([x1, y1, x2, y2], outline=outline, width=width_px)
-                    label_text = _annotation_label(ann, label)
-                    _draw_label(draw, (x1, y1), label_text, font, label_fg, outline, img_w, img_h)
-                elif ann.get("type") == "polygon":
+            for ann_index, ann in enumerate(annotations):
+                x1, y1, x2, y2 = _annotation_crop_rect(ann, img_w, img_h, coord_base)
+                crop = source_pil.crop((x1, y1, x2, y2)).convert("RGB")
+                crop_images.append(crop)
+                crop_infos.append(
+                    {
+                        "image_index": image_index,
+                        "bbox_index": ann_index,
+                        "ref": _as_text(ann.get("ref", "")),
+                        "text": _as_text(ann.get("text", "")),
+                        "box": [x1, y1, x2, y2],
+                        "crop_size": [max(1, x2 - x1), max(1, y2 - y1)],
+                        "source_size": [img_w, img_h],
+                        "coord_base": coord_base,
+                    }
+                )
+
+                if ann.get("type") == "polygon":
                     points = _scaled_points(ann.get("points", []), img_w, img_h, coord_base)
                     if len(points) >= 2:
                         draw.line(points + [points[0]], fill=outline, width=width_px, joint="curve")
-                        min_x = min(p[0] for p in points)
-                        min_y = min(p[1] for p in points)
-                        label_text = _annotation_label(ann, label)
-                        _draw_label(draw, (min_x, min_y), label_text, font, label_fg, outline, img_w, img_h)
+                else:
+                    draw.rectangle([x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)], outline=outline, width=width_px)
+
+                label_text = _annotation_label(ann, label)
+                _draw_label(draw, (x1, y1), label_text, font, label_fg, outline, img_w, img_h)
 
             output_images.append(_pil_to_tensor(pil_image, image.device))
 
-        return (torch.stack(output_images, dim=0),)
+        crop_batch = _crops_to_batch(crop_images, crop_infos, image.device)
+        crop_info_json = json.dumps(crop_infos, ensure_ascii=False)
+
+        return (torch.stack(output_images, dim=0), crop_batch, crop_info_json)
 
 
 class DeepSeekOCRDrawBBoxPasteText(DeepSeekOCRDrawBBox):
@@ -391,12 +621,79 @@ class DeepSeekOCRDrawBBoxPasteText(DeepSeekOCRDrawBBox):
         return types
 
 
+class DeepSeekOCRPasteBBoxCrops:
+    """Paste bbox crops back onto the original image using crop_info from DeepSeekOCRDrawBBox."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_image": ("IMAGE",),
+                "crop_images": ("IMAGE",),
+                "crop_info": ("STRING", {"forceInput": True}),
+                "strip_padding": ("BOOLEAN", {"default": True}),
+                "resize_to_bbox": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "paste_crops"
+    CATEGORY = "DeepSeek OCR"
+
+    def paste_crops(
+        self,
+        original_image: torch.Tensor,
+        crop_images: torch.Tensor,
+        crop_info: Any,
+        strip_padding: bool = True,
+        resize_to_bbox: bool = True,
+    ):
+        original_batch = _normalize_image_batch(original_image)
+        crop_batch = _normalize_image_batch(crop_images)
+        infos = _parse_crop_info(crop_info)
+
+        output_pils = [_tensor_image_to_pil(img).copy() for img in original_batch]
+        if not infos:
+            return (torch.stack([_pil_to_tensor(img, original_image.device) for img in output_pils], dim=0),)
+
+        should_strip_padding = _to_bool(strip_padding)
+        should_resize = _to_bool(resize_to_bbox)
+        count = min(len(infos), int(crop_batch.shape[0]))
+
+        for crop_index in range(count):
+            info = infos[crop_index]
+            try:
+                image_index = int(info.get("image_index", 0))
+            except Exception:
+                image_index = 0
+            if image_index < 0 or image_index >= len(output_pils):
+                continue
+
+            base = output_pils[image_index]
+            crop = _tensor_image_to_pil(crop_batch[crop_index]).convert("RGB")
+            if should_strip_padding:
+                crop = _strip_padding_from_crop(crop, info)
+
+            x1, y1, x2, y2 = _target_box_from_info(info, base.width, base.height)
+            target_w = max(1, x2 - x1)
+            target_h = max(1, y2 - y1)
+            if should_resize and crop.size != (target_w, target_h):
+                crop = _resize_image(crop, (target_w, target_h))
+
+            _paste_clipped(base, crop, x1, y1)
+
+        return (torch.stack([_pil_to_tensor(img, original_image.device) for img in output_pils], dim=0),)
+
+
 NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRDrawBBox": DeepSeekOCRDrawBBox,
     "DeepSeekOCRDrawBBoxPasteText": DeepSeekOCRDrawBBoxPasteText,
+    "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRDrawBBox": "DeepSeek OCR Draw BBox",
     "DeepSeekOCRDrawBBoxPasteText": "DeepSeek OCR Draw BBox (Paste Text)",
+    "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
 }
