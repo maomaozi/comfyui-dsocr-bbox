@@ -26,6 +26,28 @@ Outputs:
 
 Same as **DeepSeek OCR Draw BBox**, but `ocr_result` is a multiline textbox for manual paste/testing.
 
+### DeepSeek OCR Expand Subset BBox
+
+Expand bboxes from OCR result `B` while treating boxes in OCR result `A - B` as protected regions. The output keeps B's original OCR text/ref format and only replaces each `<|det|>...</|det|>` bbox with the expanded bbox.
+
+Inputs:
+
+- `ocr_result_a`: full OCR result A, STRING socket
+- `ocr_result_b`: subset OCR result B, STRING socket
+- `image_width`, `image_height`: optional source image size; set both to `0` to skip pixel-bound clipping, or connect optional `image` to auto-read size
+- `coord_base`: coordinate base, default `1000`; set to `0` when OCR coordinates are already pixels
+- `max_expand`: maximum outward expansion in pixels, default `100`
+- `safety_margin`: protected margin around boxes in `A - B`, default `0`
+- `output_coord_base`: `-1` keeps the same coordinate base as input; `0` forces pixel output; positive values output normalized coordinates with that base
+
+Output:
+
+- `ocr_result`: B OCR result with expanded bbox coordinates
+
+### DeepSeek OCR Expand Subset BBox (Paste Text)
+
+Same as **DeepSeek OCR Expand Subset BBox**, but both OCR inputs are multiline textboxes for manual paste/testing.
+
 ### DeepSeek OCR Paste BBox Crops
 
 Paste cropped/processed bbox images back onto the original image using `crop_info`.

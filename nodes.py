@@ -8,6 +8,11 @@ import numpy as np
 import torch
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
+try:
+    from .bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
+except Exception:
+    from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
+
 
 _REF_DET_RE = re.compile(
     r"<\|ref\|>(?P<ref>.*?)<\|/ref\|>\s*"
@@ -657,6 +662,102 @@ class DeepSeekOCRDrawBBoxPasteText(DeepSeekOCRDrawBBox):
         return types
 
 
+class DeepSeekOCRExpandSubsetBBox:
+    """Expand B OCR bboxes while keeping away from OCR boxes in A - B."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "ocr_result_a": ("STRING", {"forceInput": True}),
+                "ocr_result_b": ("STRING", {"forceInput": True}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
+                "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
+                "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "output_coord_base": ("INT", {"default": -1, "min": -1, "max": 100000, "step": 1}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("ocr_result",)
+    FUNCTION = "expand_bbox"
+    CATEGORY = "DeepSeek OCR"
+
+    def expand_bbox(
+        self,
+        ocr_result_a: Any,
+        ocr_result_b: Any,
+        image_width: int = 0,
+        image_height: int = 0,
+        coord_base: int = 1000,
+        max_expand: int = 100,
+        safety_margin: int = 0,
+        output_coord_base: int = -1,
+        image: Any = None,
+    ):
+        image_size = None
+        try:
+            width = int(image_width or 0)
+            height = int(image_height or 0)
+            if (width <= 0 or height <= 0) and image is not None:
+                batch = _normalize_image_batch(image)
+                if batch.ndim == 4:
+                    height = int(batch.shape[1])
+                    width = int(batch.shape[2])
+            if width > 0 and height > 0:
+                image_size = (width, height)
+        except Exception:
+            image_size = None
+
+        out_base = None
+        try:
+            output_coord_base_int = int(output_coord_base)
+            if output_coord_base_int >= 0:
+                out_base = output_coord_base_int
+        except Exception:
+            out_base = None
+
+        expanded_boxes = expand_subset_bboxes(
+            ocr_result_a,
+            ocr_result_b,
+            image_size=image_size,
+            max_expand=max(0, int(max_expand or 0)),
+            safety_margin=max(0, int(safety_margin or 0)),
+            coord_base=int(coord_base or 0),
+            output_coord_base=out_base,
+            round_output=True,
+        )
+        expanded_ocr = replace_ocr_bboxes(ocr_result_b, expanded_boxes)
+        return (expanded_ocr,)
+
+
+class DeepSeekOCRExpandSubsetBBoxPasteText(DeepSeekOCRExpandSubsetBBox):
+    """Same as DeepSeekOCRExpandSubsetBBox, but OCR inputs are multiline paste boxes."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "ocr_result_a": ("STRING", {"multiline": True, "default": ""}),
+                "ocr_result_b": ("STRING", {"multiline": True, "default": ""}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
+                "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
+                "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "output_coord_base": ("INT", {"default": -1, "min": -1, "max": 100000, "step": 1}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+
 class DeepSeekOCRPasteBBoxCrops:
     """Paste bbox crops back onto the original image using crop_info from DeepSeekOCRDrawBBox."""
 
@@ -725,11 +826,15 @@ class DeepSeekOCRPasteBBoxCrops:
 NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRDrawBBox": DeepSeekOCRDrawBBox,
     "DeepSeekOCRDrawBBoxPasteText": DeepSeekOCRDrawBBoxPasteText,
+    "DeepSeekOCRExpandSubsetBBox": DeepSeekOCRExpandSubsetBBox,
+    "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRDrawBBox": "DeepSeek OCR Draw BBox",
     "DeepSeekOCRDrawBBoxPasteText": "DeepSeek OCR Draw BBox (Paste Text)",
+    "DeepSeekOCRExpandSubsetBBox": "DeepSeek OCR Expand Subset BBox",
+    "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
 }
