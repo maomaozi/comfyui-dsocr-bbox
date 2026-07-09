@@ -70,9 +70,12 @@ Output:
 ## Expected OCR format
 
 ```text
-<|ref|>title<|/ref|><|det|>[[12, 0, 386, 45]]<|/det|>
-# BENBO本博
+<|ref|>已售6万+健腹轮<|/ref|><|det|>[[59, 72, 485, 124]]<|/det|>
+<|ref|>更懂你的需求<|/ref|><|det|>[[59, 145, 415, 200]]<|/det|>
+<|ref|>数据来源店铺健腹轮累计销量！<|/ref|><|det|>[[54, 217, 329, 240]]<|/det|>
 ```
+
+The parser also remains compatible with the older layout where `<|ref|>` is a generic type such as `text`/`title` and the recognized text is placed on the following lines.
 
 Supported detection shapes include rectangles like `[[x1, y1, x2, y2]]` and polygon points like
 `[[x1, y1], [x2, y2], [x3, y3], [x4, y4]]`.

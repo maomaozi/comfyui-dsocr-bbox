@@ -36,12 +36,64 @@ _REF_DET_RE = re.compile(
 _DET_RE = re.compile(r"<\|det\|>(?P<det>.*?)<\|/det\|>", re.S)
 _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 _INVISIBLE_LABEL_RE = re.compile(r"[\s  ᠎ -‏    ⁠　﻿]+")
+_GENERIC_REF_LABELS = {
+    "text",
+    "title",
+    "image",
+    "img",
+    "picture",
+    "pic",
+    "photo",
+    "figure",
+    "table",
+    "chart",
+    "formula",
+    "equation",
+    "caption",
+    "paragraph",
+    "header",
+    "footer",
+    "block",
+    "unknown",
+    "文本",
+    "文字",
+    "标题",
+    "图片",
+    "图像",
+    "表格",
+    "图表",
+    "公式",
+}
 _EPS = 1e-9
+
+
+def _compact_visible_text(text: str) -> str:
+    """Remove whitespace/invisible characters used by OCR around labels."""
+    return _INVISIBLE_LABEL_RE.sub("", text or "")
 
 
 def _has_visible_label_text(text: str) -> bool:
     """Return true when OCR block text contains visible label content."""
-    return bool(_INVISIBLE_LABEL_RE.sub("", text or ""))
+    return bool(_compact_visible_text(text))
+
+
+def _has_content_ref_text(ref: str) -> bool:
+    """Return true when the ref tag itself looks like recognized OCR text.
+
+    Older DeepSeek-style outputs often used generic refs such as ``text`` or
+    ``image`` and placed the recognized text after ``<|det|>``.  Newer outputs
+    place the recognized text directly in ``<|ref|>``.  Treat generic refs as
+    metadata, but keep non-generic refs as real labels.
+    """
+    compact = _compact_visible_text(ref)
+    if not compact:
+        return False
+    return compact.strip("#：:;；,，.。[]【】()（）<>《》").lower() not in _GENERIC_REF_LABELS
+
+
+def _has_ocr_label_text(ref: str, text: str) -> bool:
+    """Return true when either the body text or non-generic ref has content."""
+    return _has_visible_label_text(text) or _has_content_ref_text(ref)
 
 
 @dataclass(frozen=True)
@@ -233,16 +285,17 @@ def parse_ocr_bboxes(value: Any, *, ignore_empty_label: bool = False) -> List[Li
     - polygon point lists, converted to their enclosing rectangle
 
     When ``ignore_empty_label=True`` and the input is full DeepSeek OCR text
-    containing ``<|ref|>...<|/ref|><|det|>...<|/det|>`` blocks, blocks whose
-    text body after the det tag is empty/whitespace are skipped.  This is useful
-    for ignoring unlabeled OCR regions such as blank image detections in A.
+    containing ``<|ref|>...<|/ref|><|det|>...<|/det|>`` blocks, blocks with no
+    visible label in either the post-det body text or a non-generic ref tag are
+    skipped.  This is useful for ignoring unlabeled OCR regions such as blank
+    image detections in A.
     """
     if isinstance(value, str):
         ref_matches = list(_REF_DET_RE.finditer(value))
         if ref_matches:
             boxes: List[List[float]] = []
             for match in ref_matches:
-                if ignore_empty_label and not _has_visible_label_text(match.group("text")):
+                if ignore_empty_label and not _has_ocr_label_text(match.group("ref"), match.group("text")):
                     continue
                 boxes.extend(_parse_det_text(match.group("det")))
             return boxes
@@ -700,9 +753,10 @@ def expand_subset_bboxes(
         matching crop-safe behavior: expansion may touch image borders but not
         cross them.  Set false only if out-of-image coordinates are desired.
     ignore_empty_label_in_a:
-        When A is DeepSeek OCR text, skip A blocks whose text body after the det
-        tag is empty/whitespace before computing ``A - B``.  This removes
-        unlabeled regions from the obstacle set by default.
+        When A is DeepSeek OCR text, skip A blocks with no visible label in
+        either the post-det body text or a non-generic ref tag before computing
+        ``A - B``.  This removes unlabeled regions from the obstacle set by
+        default.
 
     Returns
     -------

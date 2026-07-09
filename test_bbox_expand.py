@@ -186,6 +186,12 @@ class TestBBoxExpand(unittest.TestCase):
         invisible_text = "<|ref|>image<|/ref|><|det|>[[1, 2, 3, 4]]<|/det|>\n​﻿　\n"
         self.assertEqual(parse_ocr_bboxes(invisible_text), [[1.0, 2.0, 3.0, 4.0]])
         self.assertEqual(parse_ocr_bboxes(invisible_text, ignore_empty_label=True), [])
+        new_format_text = """<|ref|>已售6万+健腹轮<|/ref|><|det|>[[59, 72, 485, 124]]<|/det|>
+<|ref|>更懂你的需求<|/ref|><|det|>[[59, 145, 415, 200]]<|/det|>"""
+        self.assertEqual(
+            parse_ocr_bboxes(new_format_text, ignore_empty_label=True),
+            [[59.0, 72.0, 485.0, 124.0], [59.0, 145.0, 415.0, 200.0]],
+        )
         self.assertEqual(parse_ocr_bboxes(B_TEXT), [[float(v) for v in box] for box in B_BOXES])
 
     def test_provided_sample_without_safety_margin(self):

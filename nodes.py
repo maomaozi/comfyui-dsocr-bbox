@@ -22,6 +22,35 @@ _REF_DET_RE = re.compile(
 )
 _DET_ONLY_RE = re.compile(r"<\|det\|>(?P<det>.*?)<\|/det\|>", re.S)
 _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+_INVISIBLE_LABEL_RE = re.compile(r"[\s  ᠎ -‏    ⁠　﻿]+")
+_GENERIC_REF_LABELS = {
+    "text",
+    "title",
+    "image",
+    "img",
+    "picture",
+    "pic",
+    "photo",
+    "figure",
+    "table",
+    "chart",
+    "formula",
+    "equation",
+    "caption",
+    "paragraph",
+    "header",
+    "footer",
+    "block",
+    "unknown",
+    "文本",
+    "文字",
+    "标题",
+    "图片",
+    "图像",
+    "表格",
+    "图表",
+    "公式",
+}
 
 
 _COMMON_CJK_FONTS = [
@@ -46,6 +75,19 @@ def _as_text(value: Any) -> str:
     if isinstance(value, (list, tuple)):
         return "\n".join(_as_text(v) for v in value)
     return str(value)
+
+
+def _compact_visible_text(text: str) -> str:
+    """Remove whitespace/invisible characters used by OCR around labels."""
+    return _INVISIBLE_LABEL_RE.sub("", text or "")
+
+
+def _is_generic_ref_text(ref: str) -> bool:
+    compact = _compact_visible_text(ref)
+    if not compact:
+        return True
+    normalized = compact.strip("#：:;；,，.。[]【】()（）<>《》").lower()
+    return normalized in _GENERIC_REF_LABELS
 
 
 def _to_bool(value: Any) -> bool:
@@ -129,10 +171,14 @@ def parse_deepseek_ocr(ocr_result: Any) -> List[Dict[str, Any]]:
     for match in _REF_DET_RE.finditer(text):
         ref = match.group("ref").strip()
         body = match.group("text").strip()
+        # Support both OCR layouts:
+        # 1. older: <|ref|>text<|/ref|><|det|>...</|det|>\nrecognized text
+        # 2. newer: <|ref|>recognized text<|/ref|><|det|>...</|det|>
+        label_text = body or (ref if not _is_generic_ref_text(ref) else "")
         for det in _parse_det(match.group("det")):
             det = dict(det)
             det["ref"] = ref
-            det["text"] = body
+            det["text"] = label_text
             annotations.append(det)
 
     if not annotations:
@@ -683,7 +729,7 @@ class DeepSeekOCRDrawBBoxPasteText(DeepSeekOCRDrawBBox):
             "STRING",
             {
                 "multiline": True,
-                "default": "<|ref|>title<|/ref|><|det|>[[12, 0, 386, 45]]<|/det|>\n# BENBO本博",
+                "default": "<|ref|>BENBO本博<|/ref|><|det|>[[12, 0, 386, 45]]<|/det|>",
             },
         )
         return types
