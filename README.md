@@ -38,7 +38,7 @@ Inputs:
 - `coord_base`: coordinate base, default `1000`; set to `0` when OCR coordinates are already pixels
 - `max_expand`: maximum outward expansion in pixels, default `100`
 - `safety_margin`: protected margin around boxes in `A - B`, default `0`
-- `ignore_empty_label`: default `true`; removes unlabeled/empty OCR blocks from A before computing protected boxes, so blank image detections do not block expansion
+- `ignore_empty_label`: default `true`; removes unlabeled/empty OCR blocks from A before computing protected boxes, including blocks whose label text only contains whitespace/invisible Unicode characters, so blank image detections do not block expansion
 - `output_coord_base`: `-1` keeps the same coordinate base as input; `0` forces pixel output; positive values output normalized coordinates with that base
 
 Output:

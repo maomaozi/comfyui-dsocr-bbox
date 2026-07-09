@@ -183,6 +183,9 @@ class TestBBoxExpand(unittest.TestCase):
             parse_ocr_bboxes(A_TEXT, ignore_empty_label=True),
             [[float(v) for v in box] for box in LABELED_A_BOXES],
         )
+        invisible_text = "<|ref|>image<|/ref|><|det|>[[1, 2, 3, 4]]<|/det|>\n​﻿　\n"
+        self.assertEqual(parse_ocr_bboxes(invisible_text), [[1.0, 2.0, 3.0, 4.0]])
+        self.assertEqual(parse_ocr_bboxes(invisible_text, ignore_empty_label=True), [])
         self.assertEqual(parse_ocr_bboxes(B_TEXT), [[float(v) for v in box] for box in B_BOXES])
 
     def test_provided_sample_without_safety_margin(self):

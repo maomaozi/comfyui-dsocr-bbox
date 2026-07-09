@@ -35,7 +35,13 @@ _REF_DET_RE = re.compile(
 )
 _DET_RE = re.compile(r"<\|det\|>(?P<det>.*?)<\|/det\|>", re.S)
 _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+_INVISIBLE_LABEL_RE = re.compile(r"[\s  ᠎ -‏    ⁠　﻿]+")
 _EPS = 1e-9
+
+
+def _has_visible_label_text(text: str) -> bool:
+    """Return true when OCR block text contains visible label content."""
+    return bool(_INVISIBLE_LABEL_RE.sub("", text or ""))
 
 
 @dataclass(frozen=True)
@@ -236,7 +242,7 @@ def parse_ocr_bboxes(value: Any, *, ignore_empty_label: bool = False) -> List[Li
         if ref_matches:
             boxes: List[List[float]] = []
             for match in ref_matches:
-                if ignore_empty_label and not match.group("text").strip():
+                if ignore_empty_label and not _has_visible_label_text(match.group("text")):
                     continue
                 boxes.extend(_parse_det_text(match.group("det")))
             return boxes
