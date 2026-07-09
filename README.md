@@ -14,12 +14,13 @@ Inputs:
 - `image`: source IMAGE
 - `ocr_result`: DeepSeek OCR text output, STRING socket
 - `coord_base`: coordinate base, default `1000`
+- `crop_expand`: expand crop area outward by this many pixels on each side, default `0` (clipped to image bounds)
 
 Outputs:
 
 - `image`: source image with bbox drawn
 - `crop_images`: all bbox crops as an IMAGE batch
-- `crop_info`: JSON metadata containing original pixel coordinates for every crop
+- `crop_info`: JSON metadata containing crop pixel coordinates for every crop; when `crop_expand > 0`, `box` is the expanded crop area and `original_box` keeps the unexpanded bbox
 
 ### DeepSeek OCR Draw BBox (Paste Text)
 

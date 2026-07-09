@@ -286,6 +286,30 @@ def _scaled_crop_rect(box: Sequence[float], width: int, height: int, coord_base:
     return _scaled_crop_rect_from_values(x1, y1, x2, y2, width, height, coord_base)
 
 
+def _expand_crop_rect(
+    rect: Tuple[int, int, int, int],
+    width: int,
+    height: int,
+    expand_px: int,
+) -> Tuple[int, int, int, int]:
+    x1, y1, x2, y2 = rect
+    expand_px = max(0, int(expand_px))
+    if expand_px <= 0:
+        return x1, y1, x2, y2
+
+    x1 = max(0, x1 - expand_px)
+    y1 = max(0, y1 - expand_px)
+    x2 = min(width, x2 + expand_px)
+    y2 = min(height, y2 + expand_px)
+
+    if x2 <= x1:
+        x2 = min(width, x1 + 1)
+    if y2 <= y1:
+        y2 = min(height, y1 + 1)
+
+    return x1, y1, x2, y2
+
+
 def _scaled_points(points: Iterable[Tuple[float, float]], width: int, height: int, coord_base: int) -> List[Tuple[int, int]]:
     return [(_scale_value(x, width, coord_base), _scale_value(y, height, coord_base)) for x, y in points]
 
@@ -524,6 +548,7 @@ class DeepSeekOCRDrawBBox:
                 "image": ("IMAGE",),
                 "ocr_result": ("STRING", {"forceInput": True}),
                 "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
+                "crop_expand": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "box_color": ("STRING", {"default": "#ff0000"}),
                 "box_width": ("INT", {"default": 3, "min": 1, "max": 100, "step": 1}),
                 "label": (["none", "ref", "text", "ref + text"], {"default": "none"}),
@@ -543,6 +568,7 @@ class DeepSeekOCRDrawBBox:
         image: torch.Tensor,
         ocr_result: Any,
         coord_base: int = 1000,
+        crop_expand: int = 0,
         box_color: str = "#ff0000",
         box_width: int = 3,
         label: str = "none",
@@ -555,6 +581,7 @@ class DeepSeekOCRDrawBBox:
         label_fg = _parse_color(label_color, (255, 255, 255))
         width_px = max(1, int(box_width))
         coord_base = int(coord_base) if coord_base is not None else 1000
+        crop_expand_px = max(0, int(crop_expand or 0))
         font = _load_font(font_path, int(label_font_size)) if label and label != "none" else ImageFont.load_default()
 
         batch = _normalize_image_batch(image)
@@ -570,7 +597,10 @@ class DeepSeekOCRDrawBBox:
             img_w, img_h = pil_image.size
 
             for ann_index, ann in enumerate(annotations):
-                x1, y1, x2, y2 = _annotation_crop_rect(ann, img_w, img_h, coord_base)
+                bbox_x1, bbox_y1, bbox_x2, bbox_y2 = _annotation_crop_rect(ann, img_w, img_h, coord_base)
+                x1, y1, x2, y2 = _expand_crop_rect(
+                    (bbox_x1, bbox_y1, bbox_x2, bbox_y2), img_w, img_h, crop_expand_px
+                )
                 crop = source_pil.crop((x1, y1, x2, y2)).convert("RGB")
                 crop_images.append(crop)
                 crop_infos.append(
@@ -580,9 +610,11 @@ class DeepSeekOCRDrawBBox:
                         "ref": _as_text(ann.get("ref", "")),
                         "text": _as_text(ann.get("text", "")),
                         "box": [x1, y1, x2, y2],
+                        "original_box": [bbox_x1, bbox_y1, bbox_x2, bbox_y2],
                         "crop_size": [max(1, x2 - x1), max(1, y2 - y1)],
                         "source_size": [img_w, img_h],
                         "coord_base": coord_base,
+                        "crop_expand": crop_expand_px,
                     }
                 )
 
@@ -591,10 +623,14 @@ class DeepSeekOCRDrawBBox:
                     if len(points) >= 2:
                         draw.line(points + [points[0]], fill=outline, width=width_px, joint="curve")
                 else:
-                    draw.rectangle([x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)], outline=outline, width=width_px)
+                    draw.rectangle(
+                        [bbox_x1, bbox_y1, max(bbox_x1, bbox_x2 - 1), max(bbox_y1, bbox_y2 - 1)],
+                        outline=outline,
+                        width=width_px,
+                    )
 
                 label_text = _annotation_label(ann, label)
-                _draw_label(draw, (x1, y1), label_text, font, label_fg, outline, img_w, img_h)
+                _draw_label(draw, (bbox_x1, bbox_y1), label_text, font, label_fg, outline, img_w, img_h)
 
             output_images.append(_pil_to_tensor(pil_image, image.device))
 
