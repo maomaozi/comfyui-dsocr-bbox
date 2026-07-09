@@ -30,6 +30,14 @@ B_BOXES = [
     [92, 280, 309, 304],
 ]
 
+EMPTY_LABEL_BOXES = [
+    [48, 270, 88, 300],
+    [33, 540, 201, 625],
+    [787, 860, 830, 896],
+]
+
+LABELED_A_BOXES = [box for box in A_BOXES if box not in EMPTY_LABEL_BOXES]
+
 A_TEXT = """--- Page 1 ---
 <|ref|>text<|/ref|><|det|>[[30, 12, 515, 50]]<|/det|>
 ROTAI荣泰 超级88
@@ -171,6 +179,10 @@ def edgewise_expected(base, obstacles, max_expand, safety_margin=0, width=None, 
 class TestBBoxExpand(unittest.TestCase):
     def test_parse_deepseek_text(self):
         self.assertEqual(parse_ocr_bboxes(A_TEXT), [[float(v) for v in box] for box in A_BOXES])
+        self.assertEqual(
+            parse_ocr_bboxes(A_TEXT, ignore_empty_label=True),
+            [[float(v) for v in box] for box in LABELED_A_BOXES],
+        )
         self.assertEqual(parse_ocr_bboxes(B_TEXT), [[float(v) for v in box] for box in B_BOXES])
 
     def test_provided_sample_without_safety_margin(self):
@@ -182,9 +194,9 @@ class TestBBoxExpand(unittest.TestCase):
             safety_margin=0,
             coord_base=0,
         )
-        self.assertEqual(expanded, [[0, 50, 560, 270], [88, 180, 409, 401]])
+        self.assertEqual(expanded, [[0, 50, 560, 360], [0, 180, 409, 401]])
 
-        obstacles = [box for box in A_BOXES if box not in B_BOXES]
+        obstacles = [box for box in LABELED_A_BOXES if box not in B_BOXES]
         for base, candidate in zip(B_BOXES, expanded):
             self.assertTrue(contains(candidate, base))
             for obstacle in obstacles:

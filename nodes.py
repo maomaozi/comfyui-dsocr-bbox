@@ -676,6 +676,7 @@ class DeepSeekOCRExpandSubsetBBox:
                 "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
                 "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
                 "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "ignore_empty_label": ("BOOLEAN", {"default": True}),
                 "output_coord_base": ("INT", {"default": -1, "min": -1, "max": 100000, "step": 1}),
             },
             "optional": {
@@ -697,6 +698,7 @@ class DeepSeekOCRExpandSubsetBBox:
         coord_base: int = 1000,
         max_expand: int = 100,
         safety_margin: int = 0,
+        ignore_empty_label: bool = True,
         output_coord_base: int = -1,
         image: Any = None,
     ):
@@ -732,6 +734,7 @@ class DeepSeekOCRExpandSubsetBBox:
             output_coord_base=out_base,
             round_output=True,
             clip_to_image=True,
+            ignore_empty_label_in_a=_to_bool(ignore_empty_label),
         )
         expanded_ocr = replace_ocr_bboxes(ocr_result_b, expanded_boxes)
         return (expanded_ocr,)
@@ -751,6 +754,7 @@ class DeepSeekOCRExpandSubsetBBoxPasteText(DeepSeekOCRExpandSubsetBBox):
                 "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
                 "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
                 "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "ignore_empty_label": ("BOOLEAN", {"default": True}),
                 "output_coord_base": ("INT", {"default": -1, "min": -1, "max": 100000, "step": 1}),
             },
             "optional": {

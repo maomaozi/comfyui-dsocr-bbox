@@ -27,6 +27,12 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple, Union
 Number = Union[int, float]
 Box = List[Number]
 
+_REF_DET_RE = re.compile(
+    r"<\|ref\|>(?P<ref>.*?)<\|/ref\|>\s*"
+    r"<\|det\|>(?P<det>.*?)<\|/det\|>"
+    r"(?P<text>.*?)(?=(?:<\|ref\|>)|\Z)",
+    re.S,
+)
 _DET_RE = re.compile(r"<\|det\|>(?P<det>.*?)<\|/det\|>", re.S)
 _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 _EPS = 1e-9
@@ -211,7 +217,7 @@ def _parse_det_text(det_text: str) -> List[List[float]]:
     return [[nums[i], nums[i + 1], nums[i + 2], nums[i + 3]] for i in range(0, len(nums) - 3, 4)]
 
 
-def parse_ocr_bboxes(value: Any) -> List[List[float]]:
+def parse_ocr_bboxes(value: Any, *, ignore_empty_label: bool = False) -> List[List[float]]:
     """Extract OCR bboxes from DeepSeek OCR text or normalize list/dict inputs.
 
     Supported inputs:
@@ -219,11 +225,25 @@ def parse_ocr_bboxes(value: Any) -> List[List[float]]:
     - ``[[x1, y1, x2, y2], ...]``
     - dictionaries containing ``box``/``bbox``/``rect``/``points``
     - polygon point lists, converted to their enclosing rectangle
+
+    When ``ignore_empty_label=True`` and the input is full DeepSeek OCR text
+    containing ``<|ref|>...<|/ref|><|det|>...<|/det|>`` blocks, blocks whose
+    text body after the det tag is empty/whitespace are skipped.  This is useful
+    for ignoring unlabeled OCR regions such as blank image detections in A.
     """
     if isinstance(value, str):
+        ref_matches = list(_REF_DET_RE.finditer(value))
+        if ref_matches:
+            boxes: List[List[float]] = []
+            for match in ref_matches:
+                if ignore_empty_label and not match.group("text").strip():
+                    continue
+                boxes.extend(_parse_det_text(match.group("det")))
+            return boxes
+
         matches = list(_DET_RE.finditer(value))
         if matches:
-            boxes: List[List[float]] = []
+            boxes = []
             for match in matches:
                 boxes.extend(_parse_det_text(match.group("det")))
             return boxes
@@ -634,6 +654,7 @@ def expand_subset_bboxes(
     match_tolerance: float = 1e-6,
     round_output: bool = True,
     clip_to_image: bool = True,
+    ignore_empty_label_in_a: bool = True,
 ) -> List[Box]:
     """Expand selected OCR bboxes while avoiding unselected OCR bboxes.
 
@@ -672,6 +693,10 @@ def expand_subset_bboxes(
         Clip input/output boxes to image bounds when true.  The default is true,
         matching crop-safe behavior: expansion may touch image borders but not
         cross them.  Set false only if out-of-image coordinates are desired.
+    ignore_empty_label_in_a:
+        When A is DeepSeek OCR text, skip A blocks whose text body after the det
+        tag is empty/whitespace before computing ``A - B``.  This removes
+        unlabeled regions from the obstacle set by default.
 
     Returns
     -------
@@ -679,7 +704,7 @@ def expand_subset_bboxes(
         Expanded B boxes in the same order as ``b_boxes``.
     """
     coord_base = int(coord_base or 0)
-    raw_a = parse_ocr_bboxes(a_boxes)
+    raw_a = parse_ocr_bboxes(a_boxes, ignore_empty_label=ignore_empty_label_in_a)
     raw_b = parse_ocr_bboxes(b_boxes)
 
     bounds = _make_bounds(image_size, coord_base) if clip_to_image else None
