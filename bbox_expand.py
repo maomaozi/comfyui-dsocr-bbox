@@ -473,11 +473,9 @@ def _max_area_expansion_for_one(
 ) -> Rect:
     """Find the maximum-area safe rectangle for one selected box.
 
-    The search is exact for axis-aligned rectangular obstacles under this model.
-    We enumerate only meaningful top/bottom coordinates: the expansion limit,
-    the original bbox edges, and protected obstacle edges.  For every vertical
-    span we compute the widest possible horizontal span that does not touch the
-    inflated obstacles outside the original bbox.
+    Kept for callers that need strict rectangle-obstacle avoidance.  The public
+    default below uses edge-wise expansion, because OCR crop expansion usually
+    expects all four sides to move outward independently.
     """
     max_expand = max(0.0, float(max_expand))
     base = base.clipped(bounds).ensure_non_empty(bounds)
@@ -518,8 +516,6 @@ def _max_area_expansion_for_one(
                 if not _overlap_1d(top, bottom, obs.y1, obs.y2):
                     continue
 
-                # If top/bottom expansion over the original x-range would enter
-                # an obstacle, this vertical span is impossible.
                 if _overlap_1d(base.x1, base.x2, obs.x1, obs.x2):
                     if top < base.y1 - _EPS and _overlap_1d(top, base.y1, obs.y1, obs.y2):
                         invalid = True
@@ -528,8 +524,6 @@ def _max_area_expansion_for_one(
                         invalid = True
                         break
 
-                # Left/right strips cover corners too, so vertical overlap with
-                # the chosen span is enough to restrict horizontal expansion.
                 if obs.x1 < base.x1 - _EPS:
                     left = max(left, min(obs.x2, base.x1))
                 if obs.x2 > base.x2 + _EPS:
@@ -553,6 +547,81 @@ def _max_area_expansion_for_one(
     return best
 
 
+def _edge_wise_expansion_for_one(
+    base: Rect,
+    obstacles: Sequence[Rect],
+    *,
+    bounds: Optional[Rect],
+    max_expand: float,
+    safety_margin: float,
+) -> Rect:
+    """Expand the four bbox sides outward independently.
+
+    Only boxes in ``A - B`` constrain the matching side:
+    - left/right are constrained by protected boxes that vertically overlap the
+      original B box and are to its left/right;
+    - top/bottom are constrained by protected boxes that horizontally overlap
+      the original B box and are above/below it.
+
+    This intentionally does not use B boxes as obstacles and does not clip to
+    image bounds unless ``bounds`` is explicitly supplied by the caller.
+    """
+    max_expand = max(0.0, float(max_expand))
+    base = base.clipped(bounds).ensure_non_empty(bounds) if bounds is not None else base.ensure_non_empty(None)
+
+    left_expand = max_expand
+    right_expand = max_expand
+    top_expand = max_expand
+    bottom_expand = max_expand
+    margin = max(0.0, float(safety_margin))
+
+    for obstacle in obstacles:
+        original = obstacle.clipped(bounds) if bounds is not None else obstacle
+        if not original.has_positive_area():
+            continue
+        protected = original.expanded(margin)
+        if bounds is not None:
+            protected = protected.clipped(bounds)
+        if not protected.has_positive_area():
+            continue
+
+        # Left / right constraints use the original obstacle's vertical overlap
+        # and side relation, while the inflated protected box provides the safe
+        # stopping edge.
+        if _overlap_1d(base.y1, base.y2, original.y1, original.y2):
+            if original.x2 <= base.x1 + _EPS:
+                left_expand = min(left_expand, max(0.0, base.x1 - protected.x2))
+            elif original.x1 < base.x1 < original.x2:
+                left_expand = 0.0
+
+            if original.x1 >= base.x2 - _EPS:
+                right_expand = min(right_expand, max(0.0, protected.x1 - base.x2))
+            elif original.x1 < base.x2 < original.x2:
+                right_expand = 0.0
+
+        # Top / bottom constraints use the original obstacle's horizontal
+        # overlap and side relation.  A side obstacle does not suppress vertical
+        # expansion just because its safety margin reaches a corner.
+        if _overlap_1d(base.x1, base.x2, original.x1, original.x2):
+            if original.y2 <= base.y1 + _EPS:
+                top_expand = min(top_expand, max(0.0, base.y1 - protected.y2))
+            elif original.y1 < base.y1 < original.y2:
+                top_expand = 0.0
+
+            if original.y1 >= base.y2 - _EPS:
+                bottom_expand = min(bottom_expand, max(0.0, protected.y1 - base.y2))
+            elif original.y1 < base.y2 < original.y2:
+                bottom_expand = 0.0
+
+    candidate = Rect(
+        base.x1 - left_expand,
+        base.y1 - top_expand,
+        base.x2 + right_expand,
+        base.y2 + bottom_expand,
+    )
+    return candidate.clipped(bounds) if bounds is not None else candidate
+
+
 def expand_subset_bboxes(
     a_boxes: Any,
     b_boxes: Any,
@@ -564,6 +633,7 @@ def expand_subset_bboxes(
     output_coord_base: Optional[int] = None,
     match_tolerance: float = 1e-6,
     round_output: bool = True,
+    clip_to_image: bool = True,
 ) -> List[Box]:
     """Expand selected OCR bboxes while avoiding unselected OCR bboxes.
 
@@ -576,10 +646,11 @@ def expand_subset_bboxes(
         The selected OCR bbox set B.  B is normally a subset of A.  The output
         order follows this input order.
     image_size:
-        Optional ``(width, height)`` in pixels.  When supplied, all output boxes
-        are clipped to the image.  If ``coord_base > 0`` this is also used to
-        convert normalized OCR coordinates to pixels before applying
-        ``max_expand`` and ``safety_margin``.
+        Optional ``(width, height)`` in pixels.  When supplied, bbox expansion is
+        clipped to ``[0, 0, width, height]`` by default, so boxes can expand up
+        to the image border but not outside it.  With ``coord_base > 0``, this
+        is also used to convert normalized OCR coordinates to pixels before
+        applying ``max_expand`` and ``safety_margin``.
     max_expand:
         Maximum outward expansion in pixels per side.  If ``image_size`` is not
         supplied and ``coord_base`` is used, this value is in coordinate units.
@@ -597,6 +668,10 @@ def expand_subset_bboxes(
         Tolerance used when subtracting B from A by bbox equality.
     round_output:
         Return integer coordinates when true; return floats when false.
+    clip_to_image:
+        Clip input/output boxes to image bounds when true.  The default is true,
+        matching crop-safe behavior: expansion may touch image borders but not
+        cross them.  Set false only if out-of-image coordinates are desired.
 
     Returns
     -------
@@ -607,14 +682,14 @@ def expand_subset_bboxes(
     raw_a = parse_ocr_bboxes(a_boxes)
     raw_b = parse_ocr_bboxes(b_boxes)
 
-    bounds = _make_bounds(image_size, coord_base)
+    bounds = _make_bounds(image_size, coord_base) if clip_to_image else None
     a_rects = [_to_internal_rect(box, image_size, coord_base, bounds) for box in raw_a]
     b_rects = [_to_internal_rect(box, image_size, coord_base, bounds) for box in raw_b]
     obstacles = _subtract_b_from_a(a_rects, b_rects, match_tolerance)
 
     expanded: List[Box] = []
     for base in b_rects:
-        rect = _max_area_expansion_for_one(
+        rect = _edge_wise_expansion_for_one(
             base,
             obstacles,
             bounds=bounds,

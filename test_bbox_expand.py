@@ -115,32 +115,57 @@ def extra_area_intersects(candidate, base, obstacle):
     return any(s[0] < s[2] and s[1] < s[3] and intersects(s, obstacle) for s in strips)
 
 
-def inflate(box, margin, width, height):
+def inflate(box, margin, width=None, height=None):
+    inflated = [box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin]
+    if width is not None and height is not None:
+        inflated = [
+            max(0, inflated[0]),
+            max(0, inflated[1]),
+            min(width, inflated[2]),
+            min(height, inflated[3]),
+        ]
+    return inflated
+
+
+def overlap_1d(a1, a2, b1, b2):
+    return a1 < b2 and a2 > b1
+
+
+def clip_box(box, width, height):
     return [
-        max(0, box[0] - margin),
-        max(0, box[1] - margin),
-        min(width, box[2] + margin),
-        min(height, box[3] + margin),
+        max(0, min(width, box[0])),
+        max(0, min(height, box[1])),
+        max(0, min(width, box[2])),
+        max(0, min(height, box[3])),
     ]
 
 
-def brute_best_area(base, obstacles, width, height, max_expand, safety_margin=0):
-    protected = [inflate(o, safety_margin, width, height) for o in obstacles]
-    min_x = max(0, base[0] - max_expand)
-    min_y = max(0, base[1] - max_expand)
-    max_x = min(width, base[2] + max_expand)
-    max_y = min(height, base[3] + max_expand)
-    best_area = -1
-    for x1 in range(min_x, base[0] + 1):
-        for y1 in range(min_y, base[1] + 1):
-            for x2 in range(base[2], max_x + 1):
-                for y2 in range(base[3], max_y + 1):
-                    candidate = [x1, y1, x2, y2]
-                    if any(extra_area_intersects(candidate, base, obs) for obs in protected):
-                        continue
-                    area = (x2 - x1) * (y2 - y1)
-                    best_area = max(best_area, area)
-    return best_area
+def edgewise_expected(base, obstacles, max_expand, safety_margin=0, width=None, height=None):
+    left = right = top = bottom = max_expand
+    for obs in obstacles:
+        protected = inflate(obs, safety_margin)
+        if overlap_1d(base[1], base[3], obs[1], obs[3]):
+            if obs[2] <= base[0]:
+                left = min(left, max(0, base[0] - protected[2]))
+            elif obs[0] < base[0] < obs[2]:
+                left = 0
+            if obs[0] >= base[2]:
+                right = min(right, max(0, protected[0] - base[2]))
+            elif obs[0] < base[2] < obs[2]:
+                right = 0
+        if overlap_1d(base[0], base[2], obs[0], obs[2]):
+            if obs[3] <= base[1]:
+                top = min(top, max(0, base[1] - protected[3]))
+            elif obs[1] < base[1] < obs[3]:
+                top = 0
+            if obs[1] >= base[3]:
+                bottom = min(bottom, max(0, protected[1] - base[3]))
+            elif obs[1] < base[3] < obs[3]:
+                bottom = 0
+    result = [base[0] - left, base[1] - top, base[2] + right, base[3] + bottom]
+    if width is not None and height is not None:
+        result = clip_box(result, width, height)
+    return result
 
 
 class TestBBoxExpand(unittest.TestCase):
@@ -174,7 +199,7 @@ class TestBBoxExpand(unittest.TestCase):
             safety_margin=5,
             coord_base=0,
         )
-        self.assertEqual(expanded, [[0, 55, 560, 265], [92, 280, 409, 304]])
+        self.assertEqual(expanded, [[0, 55, 560, 265], [92, 180, 409, 396]])
 
     def test_replace_ocr_bboxes_preserves_b_text(self):
         expanded_text = replace_ocr_bboxes(B_TEXT, [[0, 50, 560, 270], [88, 180, 409, 401]])
@@ -192,6 +217,15 @@ class TestBBoxExpand(unittest.TestCase):
             max_expand=100,
         )
         self.assertEqual(expanded, [[0, 0, 50, 50]])
+
+        unbounded = expand_subset_bboxes(
+            [[10, 10, 30, 30]],
+            [[10, 10, 30, 30]],
+            image_size=(50, 50),
+            max_expand=100,
+            clip_to_image=False,
+        )
+        self.assertEqual(unbounded, [[-90, -90, 130, 130]])
 
     def test_obstacle_and_safety_margin_block_one_side(self):
         expanded = expand_subset_bboxes(
@@ -242,12 +276,21 @@ class TestBBoxExpand(unittest.TestCase):
         )
         self.assertEqual(expanded, [[5, 5, 30, 30]])
 
+        unbounded = expand_subset_bboxes(
+            [[40, 40, 10, 10]],
+            [[40, 40, 10, 10]],
+            image_size=(30, 30),
+            max_expand=5,
+            clip_to_image=False,
+        )
+        self.assertEqual(unbounded, [[5, 5, 45, 45]])
+
     def test_polygon_points_are_converted_to_enclosing_rect(self):
         polygon = [[(10, 10), (20, 10), (20, 30), (10, 30)]]
         expanded = expand_subset_bboxes(polygon, polygon, image_size=(100, 100), max_expand=5)
         self.assertEqual(expanded, [[5, 5, 25, 35]])
 
-    def test_random_small_cases_match_bruteforce_max_area(self):
+    def test_random_small_cases_match_edgewise_rule(self):
         rng = random.Random(7)
         width = height = 9
         for _ in range(50):
@@ -273,9 +316,8 @@ class TestBBoxExpand(unittest.TestCase):
                 max_expand=max_expand,
                 safety_margin=safety_margin,
             )[0]
-            expected_area = brute_best_area(base, obstacles, width, height, max_expand, safety_margin)
-            actual_area = (expanded[2] - expanded[0]) * (expanded[3] - expanded[1])
-            self.assertEqual(actual_area, expected_area, (base, obstacles, max_expand, safety_margin, expanded))
+            expected = edgewise_expected(base, obstacles, max_expand, safety_margin, width, height)
+            self.assertEqual(expanded, expected, (base, obstacles, max_expand, safety_margin, expanded))
 
 
 if __name__ == "__main__":

@@ -731,6 +731,7 @@ class DeepSeekOCRExpandSubsetBBox:
             coord_base=int(coord_base or 0),
             output_coord_base=out_base,
             round_output=True,
+            clip_to_image=True,
         )
         expanded_ocr = replace_ocr_bboxes(ocr_result_b, expanded_boxes)
         return (expanded_ocr,)

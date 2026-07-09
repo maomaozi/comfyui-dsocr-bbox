@@ -28,13 +28,13 @@ Same as **DeepSeek OCR Draw BBox**, but `ocr_result` is a multiline textbox for 
 
 ### DeepSeek OCR Expand Subset BBox
 
-Expand bboxes from OCR result `B` while treating boxes in OCR result `A - B` as protected regions. The output keeps B's original OCR text/ref format and only replaces each `<|det|>...</|det|>` bbox with the expanded bbox.
+Expand bboxes from OCR result `B` while treating boxes in OCR result `A - B` as protected regions. Expansion is side-wise: left/right/top/bottom all try to move outward up to `max_expand`, and only protected boxes on the corresponding side limit that side. Boxes inside `B` do not avoid each other. Image borders are allowed as final stopping edges: expanded boxes can touch the border but are clipped inside the image when image size is provided. The output keeps B's original OCR text/ref format and only replaces each `<|det|>...</|det|>` bbox with the expanded bbox.
 
 Inputs:
 
 - `ocr_result_a`: full OCR result A, STRING socket
 - `ocr_result_b`: subset OCR result B, STRING socket
-- `image_width`, `image_height`: optional source image size; set both to `0` to skip pixel-bound clipping, or connect optional `image` to auto-read size
+- `image_width`, `image_height`: source image size; used to clip the expanded bbox to image bounds and for `coord_base=1000` normalized-coordinate conversion. If both are `0` and optional `image` is connected, the node auto-reads the image size.
 - `coord_base`: coordinate base, default `1000`; set to `0` when OCR coordinates are already pixels
 - `max_expand`: maximum outward expansion in pixels, default `100`
 - `safety_margin`: protected margin around boxes in `A - B`, default `0`
