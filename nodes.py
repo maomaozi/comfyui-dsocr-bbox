@@ -125,6 +125,19 @@ def _polygon_from_flat_numbers(nums: Sequence[float]) -> Dict[str, Any]:
 def _detections_from_obj(obj: Any) -> List[Dict[str, Any]]:
     detections: List[Dict[str, Any]] = []
 
+    if isinstance(obj, dict):
+        for key in ("box", "bbox", "rect"):
+            if key in obj:
+                return _detections_from_obj(obj[key])
+        if "points" in obj:
+            return _detections_from_obj(obj["points"])
+        if "det" in obj:
+            return _parse_det(_as_text(obj["det"]))
+        for key in ("boxes", "bboxes", "detections"):
+            if key in obj:
+                return _detections_from_obj(obj[key])
+        return detections
+
     if _is_flat_number_list(obj):
         nums = [float(v) for v in obj]
         if len(nums) == 4:
@@ -188,6 +201,23 @@ def parse_deepseek_ocr(ocr_result: Any) -> List[Dict[str, Any]]:
                 det["ref"] = ""
                 det["text"] = ""
                 annotations.append(det)
+
+    # Also accept plain bbox JSON/Python text, for example
+    # [[x1, y1, x2, y2], ...] or {"bbox": [x1, y1, x2, y2]}.
+    if not annotations and text.strip():
+        try:
+            try:
+                obj = json.loads(text.strip())
+            except Exception:
+                obj = ast.literal_eval(text.strip())
+            detections = _detections_from_obj(obj)
+        except Exception:
+            detections = _parse_det(text)
+        for det in detections:
+            det = dict(det)
+            det["ref"] = ""
+            det["text"] = ""
+            annotations.append(det)
 
     return annotations
 
@@ -590,6 +620,38 @@ def _make_edge_feather_mask(size: Tuple[int, int], radius: int, strength: float)
     return Image.fromarray(mask, mode="L")
 
 
+def _bbox_annotations_to_mask(
+    bbox_info: Any,
+    width: int,
+    height: int,
+    coord_base: int = 1000,
+) -> torch.Tensor:
+    """Rasterize bbox/OCR annotations to a ComfyUI MASK tensor [H, W]."""
+    width = int(width)
+    height = int(height)
+    if width <= 0 or height <= 0:
+        raise ValueError("Mask width and height must both be greater than zero")
+
+    annotations = parse_deepseek_ocr(bbox_info)
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    for annotation in annotations:
+        if annotation.get("type") == "polygon":
+            points = _scaled_points(annotation.get("points", []), width, height, coord_base)
+            if len(points) >= 3:
+                draw.polygon(points, fill=255)
+            continue
+
+        x1, y1, x2, y2 = _annotation_crop_rect(annotation, width, height, coord_base)
+        # PIL rectangles include the final coordinate, while OCR boxes and tensor
+        # slices are half-open. Subtract one to represent [x1, y1, x2, y2).
+        draw.rectangle((x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)), fill=255)
+
+    array = np.asarray(canvas, dtype=np.float32) / 255.0
+    return torch.from_numpy(array.copy())
+
+
 def _paste_clipped(
     base: Image.Image,
     patch: Image.Image,
@@ -836,6 +898,71 @@ class DeepSeekOCRExpandSubsetBBoxPasteText(DeepSeekOCRExpandSubsetBBox):
         }
 
 
+class DeepSeekOCRBBoxToMask:
+    """Convert bbox/OCR information to a ComfyUI inpainting MASK."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "bbox_info": ("STRING", {"forceInput": True}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
+                "invert_mask": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("MASK",)
+    RETURN_NAMES = ("mask",)
+    FUNCTION = "bbox_to_mask"
+    CATEGORY = "DeepSeek OCR"
+
+    def bbox_to_mask(
+        self,
+        bbox_info: Any,
+        image_width: int = 0,
+        image_height: int = 0,
+        coord_base: int = 1000,
+        invert_mask: bool = False,
+        image: Any = None,
+    ):
+        width = int(image_width or 0)
+        height = int(image_height or 0)
+        batch_size = 1
+
+        if image is not None:
+            image_batch = _normalize_image_batch(image)
+            batch_size = int(image_batch.shape[0])
+            if width <= 0:
+                width = int(image_batch.shape[2])
+            if height <= 0:
+                height = int(image_batch.shape[1])
+
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "BBox To Mask requires image_width/image_height greater than zero, "
+                "or an image connected to provide the mask size"
+            )
+
+        mask = _bbox_annotations_to_mask(
+            bbox_info,
+            width,
+            height,
+            max(0, int(coord_base or 0)),
+        )
+        if _to_bool(invert_mask):
+            mask = 1.0 - mask
+
+        # ComfyUI MASK uses float32 [batch, height, width], with 1 denoting the
+        # area to denoise/inpaint. Repeat for an attached IMAGE batch.
+        mask = mask.unsqueeze(0).repeat(batch_size, 1, 1)
+        return (mask,)
+
+
 class DeepSeekOCRPasteBBoxCrops:
     """Paste bbox crops back onto the original image using crop_info from DeepSeekOCRDrawBBox."""
 
@@ -916,6 +1043,7 @@ NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRDrawBBoxPasteText": DeepSeekOCRDrawBBoxPasteText,
     "DeepSeekOCRExpandSubsetBBox": DeepSeekOCRExpandSubsetBBox,
     "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
+    "DeepSeekOCRBBoxToMask": DeepSeekOCRBBoxToMask,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
 }
 
@@ -924,5 +1052,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRDrawBBoxPasteText": "DeepSeek OCR Draw BBox (Paste Text)",
     "DeepSeekOCRExpandSubsetBBox": "DeepSeek OCR Expand Subset BBox",
     "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
+    "DeepSeekOCRBBoxToMask": "DeepSeek OCR BBox To Mask",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
 }

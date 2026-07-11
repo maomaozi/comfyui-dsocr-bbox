@@ -45,6 +45,22 @@ Output:
 
 - `ocr_result`: B OCR result with expanded bbox coordinates
 
+### DeepSeek OCR BBox To Mask
+
+Convert bbox information into a native ComfyUI `MASK` (`float32`, shape `[batch, height, width]`), compatible with the mask output of ComfyUI's built-in **Load Image** node and usable directly by inpainting workflows. The bbox interior is `1` (white / inpaint area), and all other pixels are `0` (black).
+
+Inputs:
+
+- `bbox_info`: bbox/OCR information from a STRING socket. It accepts full DeepSeek OCR text, `<|det|>` blocks, plain lists such as `[[x1, y1, x2, y2], ...]`, dictionaries such as `{"bbox": [x1, y1, x2, y2]}`, and polygons
+- `image_width`, `image_height`: output mask dimensions. Leave both at `0` when optional `image` is connected to read its dimensions automatically
+- `coord_base`: coordinate base, default `1000`; set to `0` for pixel coordinates
+- `invert_mask`: default `false`; when enabled, reverses the mask so bbox regions are `0` (black) and regions outside all bboxes are `1` (white / inpaint area)
+- optional `image`: supplies the mask dimensions and batch size; image content is not changed or returned
+
+Output:
+
+- `mask`: standard ComfyUI MASK; white bbox regions are selected for inpainting
+
 ### DeepSeek OCR Expand Subset BBox (Paste Text)
 
 Same as **DeepSeek OCR Expand Subset BBox**, but both OCR inputs are multiline textboxes for manual paste/testing.
