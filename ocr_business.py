@@ -391,7 +391,7 @@ class OCRBusinessRuleClassifier:
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("classified_json", "review_items_json")
     FUNCTION = "classify"
-    CATEGORY = "OCR/Business"
+    CATEGORY = "DeepSeek OCR"
 
     def classify(self, ocr_detections_json, minimum_confidence=0.72, bottom_start_ratio=0.83,
                  preserve_left_features=True, remove_keywords="", preserve_keywords=""):
@@ -414,7 +414,7 @@ class OCRBusinessReviewPrompt:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("llm_prompt",)
     FUNCTION = "build"
-    CATEGORY = "OCR/Business"
+    CATEGORY = "DeepSeek OCR"
 
     def build(self, classified_json, business_goal):
         batches = _batches(classified_json)
@@ -453,7 +453,7 @@ class OCRApplyBusinessDecisions:
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("decisions_json", "remove_items_json", "preserve_items_json")
     FUNCTION = "apply"
-    CATEGORY = "OCR/Business"
+    CATEGORY = "DeepSeek OCR"
 
     def apply(self, classified_json, llm_decisions, unresolved_action="keep_rule"):
         batches = apply_decisions(classified_json, llm_decisions, unresolved_action)
@@ -476,7 +476,7 @@ class OCRBusinessRegionsToMask:
     RETURN_TYPES = ("MASK", "MASK", "MASK", "MASK", "STRING", "IMAGE")
     RETURN_NAMES = ("mask", "large_block_mask", "detail_mask", "preserve_mask", "regions_json", "preview")
     FUNCTION = "render"
-    CATEGORY = "OCR/Business"
+    CATEGORY = "DeepSeek OCR"
 
     def render(self, image, decisions_json, text_padding=8, region_padding=24,
                mask_shape="polygon", infer_gift_object=True):

@@ -332,7 +332,7 @@ class RapidOCRDetectText:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("detections_json",)
     FUNCTION = "detect"
-    CATEGORY = "OCR/Detect"
+    CATEGORY = "DeepSeek OCR"
     DESCRIPTION = (
         "Detection-only RapidOCR node. Use a relatively permissive candidate "
         "threshold, then classify or review detections downstream."
@@ -395,7 +395,7 @@ class RapidOCRTextMask:
     RETURN_TYPES = ("MASK", "STRING")
     RETURN_NAMES = ("mask", "detections_json")
     FUNCTION = "detect"
-    CATEGORY = "OCR/Mask"
+    CATEGORY = "DeepSeek OCR"
     DESCRIPTION = (
         "Runs PP-OCR models through RapidOCR ONNXRuntime and turns every text "
         "detection into a standard ComfyUI MASK. CUDA requires onnxruntime-gpu."
