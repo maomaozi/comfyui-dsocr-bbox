@@ -177,6 +177,31 @@ Output:
 
 - `mask`: standard ComfyUI MASK; white bbox regions are selected for inpainting
 
+### DeepSeek OCR JSON Polygon To Mask
+
+Convert OCR JSON containing pixel-coordinate polygons into a native ComfyUI `MASK`. Unlike the general BBox node, this node defaults to `coord_base=0` and prioritizes `polygon` when an item also contains `box`/`bbox`.
+
+Example input:
+
+```json
+[
+  {"text": "智能四轮", "polygon": [[32.0, 82.0], [198.0, 82.0], [198.0, 123.0], [32.0, 123.0]]},
+  {"text": "2025新款", "polygon": [[24.0, 128.0], [216.0, 128.0], [216.0, 178.0], [24.0, 178.0]]}
+]
+```
+
+Inputs:
+
+- `json_data`: strict JSON from a STRING socket; accepts a top-level item list, `detections`/`items`/`results` wrappers, and each item's `polygon`, `points`, `box`, or `bbox`
+- `image_width`, `image_height`: output dimensions; leave both at `0` when optional `image` is connected
+- `coord_base`: default `0` for pixel coordinates; set a positive normalization base only when needed
+- `invert_mask`: invert selected and unselected areas
+- optional `image`: supplies dimensions and output batch size
+
+Output:
+
+- `mask`: polygon interiors are `1` (white/selected), other pixels are `0`
+
 ### DeepSeek OCR Expand Subset BBox (Paste Text)
 
 Same as **DeepSeek OCR Expand Subset BBox**, but both OCR inputs are multiline textboxes for manual paste/testing.

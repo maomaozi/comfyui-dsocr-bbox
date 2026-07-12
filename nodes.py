@@ -140,16 +140,27 @@ def _detections_from_obj(obj: Any) -> List[Dict[str, Any]]:
     detections: List[Dict[str, Any]] = []
 
     if isinstance(obj, dict):
+        # Prefer a polygon when an OCR item contains both an enclosing box and
+        # its original polygon. This preserves rotated/non-rectangular regions.
+        for key in ("polygon", "points"):
+            if key in obj:
+                parsed = _detections_from_obj(obj[key])
+                if parsed:
+                    return parsed
         for key in ("box", "bbox", "rect"):
             if key in obj:
-                return _detections_from_obj(obj[key])
-        if "points" in obj:
-            return _detections_from_obj(obj["points"])
+                parsed = _detections_from_obj(obj[key])
+                if parsed:
+                    return parsed
         if "det" in obj:
-            return _parse_det(_as_text(obj["det"]))
-        for key in ("boxes", "bboxes", "detections"):
+            parsed = _parse_det(_as_text(obj["det"]))
+            if parsed:
+                return parsed
+        for key in ("polygons", "boxes", "bboxes", "detections", "items", "results", "data"):
             if key in obj:
-                return _detections_from_obj(obj[key])
+                parsed = _detections_from_obj(obj[key])
+                if parsed:
+                    return parsed
         return detections
 
     if _is_flat_number_list(obj):
@@ -634,19 +645,18 @@ def _make_edge_feather_mask(size: Tuple[int, int], radius: int, strength: float)
     return Image.fromarray(mask, mode="L")
 
 
-def _bbox_annotations_to_mask(
-    bbox_info: Any,
+def _annotations_to_mask(
+    annotations: Sequence[Dict[str, Any]],
     width: int,
     height: int,
     coord_base: int = 1000,
 ) -> torch.Tensor:
-    """Rasterize bbox/OCR annotations to a ComfyUI MASK tensor [H, W]."""
+    """Rasterize parsed annotations to a ComfyUI MASK tensor [H, W]."""
     width = int(width)
     height = int(height)
     if width <= 0 or height <= 0:
         raise ValueError("Mask width and height must both be greater than zero")
 
-    annotations = parse_deepseek_ocr(bbox_info)
     canvas = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(canvas)
 
@@ -664,6 +674,21 @@ def _bbox_annotations_to_mask(
 
     array = np.asarray(canvas, dtype=np.float32) / 255.0
     return torch.from_numpy(array.copy())
+
+
+def _bbox_annotations_to_mask(
+    bbox_info: Any,
+    width: int,
+    height: int,
+    coord_base: int = 1000,
+) -> torch.Tensor:
+    """Parse bbox/OCR input and rasterize it to a ComfyUI MASK [H, W]."""
+    return _annotations_to_mask(
+        parse_deepseek_ocr(bbox_info),
+        width,
+        height,
+        coord_base,
+    )
 
 
 def _paste_clipped(
@@ -977,6 +1002,83 @@ class DeepSeekOCRBBoxToMask:
         return (mask,)
 
 
+class DeepSeekOCRJSONPolygonToMask:
+    """Convert pixel-coordinate OCR JSON polygons to a ComfyUI MASK."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "json_data": ("STRING", {"forceInput": True}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "invert_mask": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("MASK",)
+    RETURN_NAMES = ("mask",)
+    FUNCTION = "json_to_mask"
+    CATEGORY = "DeepSeek OCR"
+    DESCRIPTION = (
+        "Rasterizes OCR JSON items such as {\"text\": \"...\", "
+        "\"polygon\": [[x, y], ...]} as polygon masks. Coordinates are pixels "
+        "by default; an optional IMAGE supplies width, height, and batch size."
+    )
+
+    def json_to_mask(
+        self,
+        json_data: Any,
+        image_width: int = 0,
+        image_height: int = 0,
+        coord_base: int = 0,
+        invert_mask: bool = False,
+        image: Any = None,
+    ):
+        width = int(image_width or 0)
+        height = int(image_height or 0)
+        batch_size = 1
+
+        if image is not None:
+            image_batch = _normalize_image_batch(image)
+            batch_size = int(image_batch.shape[0])
+            if width <= 0:
+                width = int(image_batch.shape[2])
+            if height <= 0:
+                height = int(image_batch.shape[1])
+
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "JSON Polygon To Mask requires image_width/image_height greater "
+                "than zero, or an image connected to provide the mask size"
+            )
+
+        json_text = _as_text(json_data).strip()
+        if not json_text:
+            data: Any = []
+        else:
+            try:
+                data = json.loads(json_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"JSON Polygon To Mask received invalid JSON: {exc}") from exc
+
+        annotations = _detections_from_obj(data)
+        mask = _annotations_to_mask(
+            annotations,
+            width,
+            height,
+            max(0, int(coord_base or 0)),
+        )
+        if _to_bool(invert_mask):
+            mask = 1.0 - mask
+
+        return (mask.unsqueeze(0).repeat(batch_size, 1, 1),)
+
+
 class DeepSeekOCRPasteBBoxCrops:
     """Paste bbox crops back onto the original image using crop_info from DeepSeekOCRDrawBBox."""
 
@@ -1058,6 +1160,7 @@ NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBox": DeepSeekOCRExpandSubsetBBox,
     "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
     "DeepSeekOCRBBoxToMask": DeepSeekOCRBBoxToMask,
+    "DeepSeekOCRJSONPolygonToMask": DeepSeekOCRJSONPolygonToMask,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
     "RapidOCRDetectText": RapidOCRDetectText,
     "RapidOCRTextMask": RapidOCRTextMask,
@@ -1073,6 +1176,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBox": "DeepSeek OCR Expand Subset BBox",
     "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
     "DeepSeekOCRBBoxToMask": "DeepSeek OCR BBox To Mask",
+    "DeepSeekOCRJSONPolygonToMask": "DeepSeek OCR JSON Polygon To Mask",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
     "RapidOCRDetectText": "RapidOCR Detect Text (PP-OCR)",
     "RapidOCRTextMask": "RapidOCR Text Mask (PP-OCR)",
