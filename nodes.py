@@ -10,10 +10,22 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 try:
     from .bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
-    from .rapidocr_mask import RapidOCRTextMask
+    from .rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
+    from .ocr_business import (
+        OCRApplyBusinessDecisions,
+        OCRBusinessRegionsToMask,
+        OCRBusinessReviewPrompt,
+        OCRBusinessRuleClassifier,
+    )
 except Exception:
     from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
-    from rapidocr_mask import RapidOCRTextMask
+    from rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
+    from ocr_business import (
+        OCRApplyBusinessDecisions,
+        OCRBusinessRegionsToMask,
+        OCRBusinessReviewPrompt,
+        OCRBusinessRuleClassifier,
+    )
 
 
 _REF_DET_RE = re.compile(
@@ -1047,7 +1059,12 @@ NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
     "DeepSeekOCRBBoxToMask": DeepSeekOCRBBoxToMask,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
+    "RapidOCRDetectText": RapidOCRDetectText,
     "RapidOCRTextMask": RapidOCRTextMask,
+    "OCRBusinessRuleClassifier": OCRBusinessRuleClassifier,
+    "OCRBusinessReviewPrompt": OCRBusinessReviewPrompt,
+    "OCRApplyBusinessDecisions": OCRApplyBusinessDecisions,
+    "OCRBusinessRegionsToMask": OCRBusinessRegionsToMask,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1057,5 +1074,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
     "DeepSeekOCRBBoxToMask": "DeepSeek OCR BBox To Mask",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
+    "RapidOCRDetectText": "RapidOCR Detect Text (PP-OCR)",
     "RapidOCRTextMask": "RapidOCR Text Mask (PP-OCR)",
+    "OCRBusinessRuleClassifier": "OCR Business Rule Classifier",
+    "OCRBusinessReviewPrompt": "OCR Business LLM Review Prompt",
+    "OCRApplyBusinessDecisions": "OCR Apply Business Decisions",
+    "OCRBusinessRegionsToMask": "OCR Business Regions To Mask",
 }

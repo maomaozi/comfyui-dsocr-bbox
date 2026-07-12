@@ -5,7 +5,89 @@ A small ComfyUI custom node that draws bounding boxes from DeepSeek OCR output, 
 DeepSeek OCR coordinates are usually normalized to `0-1000`; keep `coord_base=1000`.
 Set `coord_base=0` only when your OCR coordinates are already pixel coordinates.
 
-## Nodes
+## Modular OCR business-mask pipeline
+
+The business filtering and region expansion are split into independent nodes, so a text or multimodal LLM can be inserted without rerunning OCR:
+
+```text
+IMAGE
+  -> RapidOCR Detect Text
+  -> OCR Business Rule Classifier
+  -> OCR Business LLM Review Prompt
+  -> your LLM node (optionally also give it IMAGE)
+  -> OCR Apply Business Decisions
+  -> OCR Business Regions To Mask
+```
+
+For deterministic rules only, skip the prompt/apply nodes and connect `classified_json` directly to `OCR Business Regions To Mask`.
+
+The intermediate JSON uses stable detection IDs (`b0_d0`, `b0_d1`, ...). A decision has two independent dimensions:
+
+- `action`: `remove`, `preserve`, `ignore`, or `review`
+- `region_policy`: `text`, `box`, `top_banner`, `bottom_banner`, `group_box`, `gift_object`, `explicit_box`, or `none`
+
+This separation is intentional: deciding that text is promotional is a semantic decision, while deciding to reconstruct an entire banner or nearby gift object is a geometric decision.
+
+### RapidOCR Detect Text (PP-OCR)
+
+Detection-only node. It outputs pixel-coordinate OCR JSON and does not make business or mask decisions. The default candidate confidence is `0.50`, intentionally lower than the classifier threshold so a downstream rule/LLM stage can inspect faint text and watermarks. Every detection includes a stable ID, text, score, bbox, polygon, OCR scale, and preprocessing variant.
+
+### OCR Business Rule Classifier
+
+Adds deterministic initial fields to every OCR detection:
+
+- `action`
+- `category`
+- `reason`
+- `region_policy`
+- `decision_source=rules`
+
+Known brand/restricted/promotion terms are removed, product specifications and configured functional terms are preserved, and ambiguous content is marked `review`. It outputs both the complete `classified_json` and a smaller `review_items_json`.
+
+### OCR Business LLM Review Prompt
+
+Builds a strict JSON-only prompt from classified detections and a configurable business goal. Connect its output to any LLM node. For better decisions about banners, logos, badges, or nearby gift objects, use a multimodal LLM and provide the original image to that LLM as well.
+
+### OCR Apply Business Decisions
+
+Merges LLM JSON back by stable detection ID. The LLM may override actions and region policies, group multiple detections, or provide an exact pixel region:
+
+```json
+{
+  "decisions": [
+    {
+      "id": "b0_d12",
+      "action": "remove",
+      "category": "gift",
+      "region_policy": "explicit_box",
+      "region": [557, 656, 707, 816],
+      "notes": "Remove the gift object next to the gift marker"
+    }
+  ]
+}
+```
+
+Markdown JSON fences and surrounding LLM prose are accepted. Items omitted by the LLM can retain their rule result or use a configurable fallback. A multimodal LLM may also return `additional_regions` for visible logos, badges, gifts, or banners that have no OCR anchor; these become synthetic removal decisions with explicit pixel boxes.
+
+### OCR Business Regions To Mask
+
+Turns final decisions into four native ComfyUI masks:
+
+- `mask`: complete removal mask
+- `large_block_mask`: whole banners, grouped regions, gifts, and explicit regions
+- `detail_mask`: `mask - large_block_mask`, suitable for a second local inpaint pass
+- `preserve_mask`: approved OCR text regions, excluding anything covered by removal
+
+It also outputs `regions_json` for auditing and an overlay preview. Region expansion is policy-based rather than hard-coded into semantic classification:
+
+- `text`: padded OCR polygon/rectangle
+- `box`: independently expanded bbox; optional LLM `expand` can be a number or `{left,top,right,bottom}`
+- `top_banner`: union matching top items, expand, and snap to top/left edges when close
+- `bottom_banner`: expand from the earliest matching item to the bottom across full width
+- `group_box`: union items sharing `group`, then expand
+- `gift_object`: infer a nearby object region from a gift marker
+- `explicit_box`: use LLM-supplied pixel `region`
+- `none`: do not draw a removal region
 
 ### RapidOCR Text Mask (PP-OCR)
 

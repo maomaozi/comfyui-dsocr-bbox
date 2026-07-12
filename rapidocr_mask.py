@@ -311,6 +311,66 @@ def _items_to_mask(
     return np.asarray(mask, dtype=np.float32) / 255.0
 
 
+class RapidOCRDetectText:
+    """Run RapidOCR and return stable, pixel-coordinate detections for downstream logic."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "speed_profile": (["fast", "balanced", "thorough"], {"default": "balanced"}),
+                "candidate_confidence": (
+                    "FLOAT",
+                    {"default": 0.50, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "accelerator": (["auto", "cpu", "cuda"], {"default": "auto"}),
+                "cpu_threads": ("INT", {"default": 0, "min": 0, "max": 128, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("detections_json",)
+    FUNCTION = "detect"
+    CATEGORY = "OCR/Detect"
+    DESCRIPTION = (
+        "Detection-only RapidOCR node. Use a relatively permissive candidate "
+        "threshold, then classify or review detections downstream."
+    )
+
+    def detect(
+        self,
+        image: torch.Tensor,
+        speed_profile: str = "balanced",
+        candidate_confidence: float = 0.50,
+        accelerator: str = "auto",
+        cpu_threads: int = 0,
+    ):
+        batch = _normalize_batch(image)
+        engine, active_provider = _get_engine(accelerator, cpu_threads)
+        batch_detections: List[Dict[str, Any]] = []
+        threshold = max(0.0, min(1.0, float(candidate_confidence)))
+
+        for image_index, tensor_image in enumerate(batch):
+            pil_image = _image_tensor_to_pil(tensor_image)
+            items = _run_ocr(engine, pil_image, speed_profile, threshold)
+            for detection_index, item in enumerate(items):
+                item["id"] = f"b{image_index}_d{detection_index}"
+            batch_detections.append(
+                {
+                    "schema": "comfyui_rapidocr_detections/v1",
+                    "image_index": image_index,
+                    "width": pil_image.width,
+                    "height": pil_image.height,
+                    "provider": active_provider,
+                    "candidate_confidence": threshold,
+                    "count": len(items),
+                    "detections": items,
+                }
+            )
+        return (json.dumps(batch_detections, ensure_ascii=False),)
+
+
 class RapidOCRTextMask:
     """Recognize all text with RapidOCR and return its regions as a MASK."""
 
