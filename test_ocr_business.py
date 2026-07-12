@@ -4,9 +4,19 @@ import unittest
 from PIL import Image
 
 try:
-    from .ocr_business import apply_decisions, build_regions, classify_batches
+    from .ocr_business import (
+        OCRApplyBusinessDecisions,
+        apply_decisions,
+        build_regions,
+        classify_batches,
+    )
 except Exception:
-    from ocr_business import apply_decisions, build_regions, classify_batches
+    from ocr_business import (
+        OCRApplyBusinessDecisions,
+        apply_decisions,
+        build_regions,
+        classify_batches,
+    )
 
 
 class TestOCRBusinessPipeline(unittest.TestCase):
@@ -37,6 +47,24 @@ class TestOCRBusinessPipeline(unittest.TestCase):
         self.assertEqual(items[1]["action"], "preserve")
         self.assertEqual(items[2]["region_policy"], "bottom_banner")
         self.assertEqual(items[4]["action"], "review")
+
+    def test_apply_node_does_not_require_llm(self):
+        batches = classify_batches(self.sample(), 0.72, 0.83, True, "", "")
+        classified = json.dumps(batches, ensure_ascii=False)
+        node = OCRApplyBusinessDecisions()
+
+        decisions_json, remove_json, preserve_json = node.apply(classified)
+        passed = json.loads(decisions_json)
+        by_id = {x["id"]: x for x in passed[0]["detections"]}
+        self.assertEqual(by_id["b0_d4"]["action"], "review")
+        self.assertGreater(len(json.loads(remove_json)), 0)
+        self.assertGreater(len(json.loads(preserve_json)), 0)
+
+        fallback_json, _, _ = node.apply(classified, "preserve")
+        fallback = json.loads(fallback_json)
+        fallback_by_id = {x["id"]: x for x in fallback[0]["detections"]}
+        self.assertEqual(fallback_by_id["b0_d4"]["action"], "preserve")
+        self.assertEqual(fallback_by_id["b0_d4"]["decision_source"], "fallback")
 
     def test_llm_override_and_region_expansion(self):
         batches = classify_batches(self.sample(), 0.72, 0.83, True, "", "")

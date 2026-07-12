@@ -445,18 +445,34 @@ class OCRBusinessReviewPrompt:
 class OCRApplyBusinessDecisions:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
-            "classified_json": ("STRING", {"forceInput": True}),
-            "llm_decisions": ("STRING", {"forceInput": True}),
-            "unresolved_action": (["keep_rule", "preserve", "ignore", "remove"], {"default": "keep_rule"}),
-        }}
+        return {
+            "required": {
+                "classified_json": ("STRING", {"forceInput": True}),
+                "unresolved_action": (["keep_rule", "preserve", "ignore", "remove"], {"default": "keep_rule"}),
+            },
+            "optional": {
+                "llm_decisions": ("STRING", {"forceInput": True}),
+            },
+        }
     RETURN_TYPES = ("STRING", "STRING", "STRING")
     RETURN_NAMES = ("decisions_json", "remove_items_json", "preserve_items_json")
     FUNCTION = "apply"
     CATEGORY = "DeepSeek OCR"
 
-    def apply(self, classified_json, llm_decisions, unresolved_action="keep_rule"):
-        batches = apply_decisions(classified_json, llm_decisions, unresolved_action)
+    def apply(self, classified_json, unresolved_action="keep_rule", llm_decisions=None):
+        if llm_decisions is None or not str(llm_decisions).strip():
+            # No LLM connected: pass rule decisions through, while still
+            # applying the configured fallback to unresolved review items.
+            batches = _batches(classified_json)
+            if unresolved_action != "keep_rule":
+                for batch in batches:
+                    for item in batch["detections"]:
+                        if item.get("action") == "review":
+                            item["action"] = unresolved_action
+                            item["reason"] = f"unresolved_{unresolved_action}"
+                            item["decision_source"] = "fallback"
+        else:
+            batches = apply_decisions(classified_json, llm_decisions, unresolved_action)
         remove = [x for b in batches for x in b["detections"] if x.get("action") == "remove"]
         preserve = [x for b in batches for x in b["detections"] if x.get("action") == "preserve"]
         return tuple(json.dumps(x, ensure_ascii=False) for x in (batches, remove, preserve))

@@ -50,7 +50,7 @@ Builds a strict JSON-only prompt from classified detections and a configurable b
 
 ### OCR Apply Business Decisions
 
-Merges LLM JSON back by stable detection ID. The LLM may override actions and region policies, group multiple detections, or provide an exact pixel region:
+`llm_decisions` is optional. With no LLM connected, the node passes the rule decisions through and still provides the separate remove/preserve JSON outputs; `unresolved_action` controls how `review` items fall back. When connected, it merges LLM JSON back by stable detection ID. The LLM may override actions and region policies, group multiple detections, or provide an exact pixel region:
 
 ```json
 {
