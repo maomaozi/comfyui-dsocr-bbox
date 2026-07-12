@@ -7,6 +7,40 @@ Set `coord_base=0` only when your OCR coordinates are already pixel coordinates.
 
 ## Nodes
 
+### RapidOCR Text Mask (PP-OCR)
+
+Runs local RapidOCR/PP-OCR directly on a ComfyUI `IMAGE` and outputs every detected text region as a native ComfyUI `MASK` (`float32`, shape `[batch, height, width]`). It also returns `detections_json` with recognized text, confidence, polygon, bbox, OCR variant, and active provider.
+
+Inputs:
+
+- `image`: source IMAGE, including image batches
+- `speed_profile`: `fast` runs original RGB once; `balanced` adds enhanced grayscale and optional 2x OCR; `thorough` additionally checks inverted grayscale
+- `minimum_confidence`: recognition confidence threshold, default `0.72`
+- `padding`: outward mask padding in pixels, default `8`
+- `mask_shape`: `polygon` preserves rotated OCR boxes; `rectangle` uses enclosing boxes
+- `accelerator`: `auto`, `cpu`, or `cuda`; `auto` chooses CUDA only when ONNX Runtime exposes `CUDAExecutionProvider`
+- `cpu_threads`: `0` keeps ONNX Runtime defaults; a positive value sets CPU intra-op threads
+- `invert_mask`: reverses selected and unselected areas
+
+Outputs:
+
+- `mask`: native ComfyUI MASK; detected text is `1` (white/selected)
+- `detections_json`: OCR metadata and the provider actually used
+
+Install dependencies in ComfyUI's Python environment:
+
+```bash
+pip install -r custom_nodes/comfyui-dsocr-bbox/requirements.txt
+```
+
+For NVIDIA GPU inference, replace the CPU ONNX Runtime package with a CUDA-compatible `onnxruntime-gpu` build. Verify it before selecting `cuda`:
+
+```bash
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+
+The output must include `CUDAExecutionProvider`. GPU acceleration applies to the PP-OCR detection, classification, and recognition ONNX models; PIL preprocessing and mask rasterization remain on CPU. For small single images, transfer/session overhead can make CPU as fast as or faster than GPU.
+
 ### DeepSeek OCR Draw BBox
 
 Inputs:

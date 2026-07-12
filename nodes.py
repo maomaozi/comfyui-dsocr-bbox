@@ -10,8 +10,10 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 try:
     from .bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
+    from .rapidocr_mask import RapidOCRTextMask
 except Exception:
     from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
+    from rapidocr_mask import RapidOCRTextMask
 
 
 _REF_DET_RE = re.compile(
@@ -1045,6 +1047,7 @@ NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
     "DeepSeekOCRBBoxToMask": DeepSeekOCRBBoxToMask,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
+    "RapidOCRTextMask": RapidOCRTextMask,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1054,4 +1057,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
     "DeepSeekOCRBBoxToMask": "DeepSeek OCR BBox To Mask",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
+    "RapidOCRTextMask": "RapidOCR Text Mask (PP-OCR)",
 }
