@@ -11,6 +11,14 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 try:
     from .bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
     from .rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
+    from .rapidocr_polygon import (
+        collect_polygon_records,
+        dumps_json,
+        extend_polygon_json,
+        extend_polygon_subset_json,
+        infer_image_size,
+        parse_json_value,
+    )
     from .ocr_business import (
         OCRApplyBusinessDecisions,
         OCRBusinessRegionsToMask,
@@ -20,6 +28,14 @@ try:
 except Exception:
     from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
     from rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
+    from rapidocr_polygon import (
+        collect_polygon_records,
+        dumps_json,
+        extend_polygon_json,
+        extend_polygon_subset_json,
+        infer_image_size,
+        parse_json_value,
+    )
     from ocr_business import (
         OCRApplyBusinessDecisions,
         OCRBusinessRegionsToMask,
@@ -1002,8 +1018,8 @@ class DeepSeekOCRBBoxToMask:
         return (mask,)
 
 
-class DeepSeekOCRJSONPolygonToMask:
-    """Convert pixel-coordinate OCR JSON polygons to a ComfyUI MASK."""
+class RapidOCRJSONPolygonToMask:
+    """Convert RapidOCR pixel-coordinate polygon JSON to a ComfyUI MASK."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1023,9 +1039,9 @@ class DeepSeekOCRJSONPolygonToMask:
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("mask",)
     FUNCTION = "json_to_mask"
-    CATEGORY = "DeepSeek OCR"
+    CATEGORY = "RapidOCR"
     DESCRIPTION = (
-        "Rasterizes OCR JSON items such as {\"text\": \"...\", "
+        "Rasterizes RapidOCR JSON items such as {\"text\": \"...\", "
         "\"polygon\": [[x, y], ...]} as polygon masks. Coordinates are pixels "
         "by default; an optional IMAGE supplies width, height, and batch size."
     )
@@ -1051,22 +1067,24 @@ class DeepSeekOCRJSONPolygonToMask:
             if height <= 0:
                 height = int(image_batch.shape[1])
 
+        data = parse_json_value(_as_text(json_data))
+        inferred_size = infer_image_size(data)
+        if inferred_size is not None:
+            if width <= 0:
+                width = inferred_size[0]
+            if height <= 0:
+                height = inferred_size[1]
+
         if width <= 0 or height <= 0:
             raise ValueError(
-                "JSON Polygon To Mask requires image_width/image_height greater "
-                "than zero, or an image connected to provide the mask size"
+                "JSON Polygon To Mask requires image_width/image_height, an "
+                "attached image, or width/height metadata in the JSON"
             )
 
-        json_text = _as_text(json_data).strip()
-        if not json_text:
-            data: Any = []
-        else:
-            try:
-                data = json.loads(json_text)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"JSON Polygon To Mask received invalid JSON: {exc}") from exc
-
-        annotations = _detections_from_obj(data)
+        annotations = [
+            {"type": "polygon", "points": points}
+            for _record, _key, points in collect_polygon_records(data)
+        ]
         mask = _annotations_to_mask(
             annotations,
             width,
@@ -1077,6 +1095,131 @@ class DeepSeekOCRJSONPolygonToMask:
             mask = 1.0 - mask
 
         return (mask.unsqueeze(0).repeat(batch_size, 1, 1),)
+
+
+class RapidOCRJSONPolygonExtend:
+    """Expand every RapidOCR JSON polygon independently."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "json_data": ("STRING", {"forceInput": True}),
+                "expand": ("INT", {"default": 8, "min": 0, "max": 10000, "step": 1}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "clip_to_image": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("json_data",)
+    FUNCTION = "extend_polygons"
+    CATEGORY = "RapidOCR"
+    DESCRIPTION = (
+        "Expands each RapidOCR polygon outward independently and preserves the "
+        "input JSON structure, text, IDs, scores, and other metadata."
+    )
+
+    def extend_polygons(
+        self,
+        json_data: Any,
+        expand: int = 8,
+        image_width: int = 0,
+        image_height: int = 0,
+        coord_base: int = 0,
+        clip_to_image: bool = True,
+        image: Any = None,
+    ):
+        width = int(image_width or 0)
+        height = int(image_height or 0)
+        if image is not None and (width <= 0 or height <= 0):
+            image_batch = _normalize_image_batch(image)
+            if width <= 0:
+                width = int(image_batch.shape[2])
+            if height <= 0:
+                height = int(image_batch.shape[1])
+        image_size = (width, height) if width > 0 and height > 0 else None
+
+        output = extend_polygon_json(
+            _as_text(json_data),
+            expand=max(0, int(expand or 0)),
+            image_size=image_size,
+            coord_base=max(0, int(coord_base or 0)),
+            clip_to_image=_to_bool(clip_to_image),
+        )
+        return (dumps_json(output),)
+
+
+class RapidOCRJSONPolygonABExtend:
+    """Expand RapidOCR B polygons while avoiding polygons in A - B."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "json_data_a": ("STRING", {"forceInput": True}),
+                "json_data_b": ("STRING", {"forceInput": True}),
+                "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
+                "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "ignore_empty_text_in_a": ("BOOLEAN", {"default": True}),
+                "clip_to_image": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("json_data_b",)
+    FUNCTION = "extend_subset_polygons"
+    CATEGORY = "RapidOCR"
+    DESCRIPTION = (
+        "Expands polygons in RapidOCR JSON B up to max_expand while treating "
+        "polygons in A - B as protected obstacles. Output preserves B's JSON structure."
+    )
+
+    def extend_subset_polygons(
+        self,
+        json_data_a: Any,
+        json_data_b: Any,
+        max_expand: int = 100,
+        safety_margin: int = 0,
+        image_width: int = 0,
+        image_height: int = 0,
+        coord_base: int = 0,
+        ignore_empty_text_in_a: bool = True,
+        clip_to_image: bool = True,
+        image: Any = None,
+    ):
+        width = int(image_width or 0)
+        height = int(image_height or 0)
+        if image is not None and (width <= 0 or height <= 0):
+            image_batch = _normalize_image_batch(image)
+            if width <= 0:
+                width = int(image_batch.shape[2])
+            if height <= 0:
+                height = int(image_batch.shape[1])
+        image_size = (width, height) if width > 0 and height > 0 else None
+
+        output = extend_polygon_subset_json(
+            _as_text(json_data_a),
+            _as_text(json_data_b),
+            max_expand=max(0, int(max_expand or 0)),
+            safety_margin=max(0, int(safety_margin or 0)),
+            image_size=image_size,
+            coord_base=max(0, int(coord_base or 0)),
+            clip_to_image=_to_bool(clip_to_image),
+            ignore_empty_text_in_a=_to_bool(ignore_empty_text_in_a),
+        )
+        return (dumps_json(output),)
 
 
 class DeepSeekOCRPasteBBoxCrops:
@@ -1160,8 +1303,10 @@ NODE_CLASS_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBox": DeepSeekOCRExpandSubsetBBox,
     "DeepSeekOCRExpandSubsetBBoxPasteText": DeepSeekOCRExpandSubsetBBoxPasteText,
     "DeepSeekOCRBBoxToMask": DeepSeekOCRBBoxToMask,
-    "DeepSeekOCRJSONPolygonToMask": DeepSeekOCRJSONPolygonToMask,
     "DeepSeekOCRPasteBBoxCrops": DeepSeekOCRPasteBBoxCrops,
+    "RapidOCRJSONPolygonToMask": RapidOCRJSONPolygonToMask,
+    "RapidOCRJSONPolygonExtend": RapidOCRJSONPolygonExtend,
+    "RapidOCRJSONPolygonABExtend": RapidOCRJSONPolygonABExtend,
     "RapidOCRDetectText": RapidOCRDetectText,
     "RapidOCRTextMask": RapidOCRTextMask,
     "OCRBusinessRuleClassifier": OCRBusinessRuleClassifier,
@@ -1176,8 +1321,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DeepSeekOCRExpandSubsetBBox": "DeepSeek OCR Expand Subset BBox",
     "DeepSeekOCRExpandSubsetBBoxPasteText": "DeepSeek OCR Expand Subset BBox (Paste Text)",
     "DeepSeekOCRBBoxToMask": "DeepSeek OCR BBox To Mask",
-    "DeepSeekOCRJSONPolygonToMask": "DeepSeek OCR JSON Polygon To Mask",
     "DeepSeekOCRPasteBBoxCrops": "DeepSeek OCR Paste BBox Crops",
+    "RapidOCRJSONPolygonToMask": "RapidOCR JSON Polygon To Mask",
+    "RapidOCRJSONPolygonExtend": "RapidOCR JSON Polygon Extend",
+    "RapidOCRJSONPolygonABExtend": "RapidOCR JSON Polygon A-B Based Extend",
     "RapidOCRDetectText": "RapidOCR Detect Text (PP-OCR)",
     "RapidOCRTextMask": "RapidOCR Text Mask (PP-OCR)",
     "OCRBusinessRuleClassifier": "OCR Business Rule Classifier",

@@ -177,9 +177,9 @@ Output:
 
 - `mask`: standard ComfyUI MASK; white bbox regions are selected for inpainting
 
-### DeepSeek OCR JSON Polygon To Mask
+## RapidOCR polygon JSON nodes
 
-Convert OCR JSON containing pixel-coordinate polygons into a native ComfyUI `MASK`. Unlike the general BBox node, this node defaults to `coord_base=0` and prioritizes `polygon` when an item also contains `box`/`bbox`.
+The polygon JSON workflow is separate from the DeepSeek OCR tag/bbox workflow. All nodes in this set use the `RapidOCR` name and the **RapidOCR** category. They accept a top-level detection list as well as nested RapidOCR output containing `detections` and batch metadata such as `width` and `height`.
 
 Example input:
 
@@ -190,17 +190,38 @@ Example input:
 ]
 ```
 
+### RapidOCR JSON Polygon To Mask
+
+Convert RapidOCR pixel-coordinate polygons into a native ComfyUI `MASK`.
+
 Inputs:
 
-- `json_data`: strict JSON from a STRING socket; accepts a top-level item list, `detections`/`items`/`results` wrappers, and each item's `polygon`, `points`, `box`, or `bbox`
-- `image_width`, `image_height`: output dimensions; leave both at `0` when optional `image` is connected
-- `coord_base`: default `0` for pixel coordinates; set a positive normalization base only when needed
+- `json_data`: strict JSON from a STRING socket; each detection needs `polygon` (compatible `points` is also accepted)
+- `image_width`, `image_height`: output dimensions; leave both at `0` when optional `image` is connected or the RapidOCR JSON contains `width`/`height` metadata
+- `coord_base`: default `0` for RapidOCR pixel coordinates
 - `invert_mask`: invert selected and unselected areas
 - optional `image`: supplies dimensions and output batch size
 
 Output:
 
 - `mask`: polygon interiors are `1` (white/selected), other pixels are `0`
+
+### RapidOCR JSON Polygon Extend
+
+Expand every polygon independently by up to `expand` pixels on each side. The original polygon is mapped into its expanded enclosing rectangle, preserving rotated or skewed polygon geometry rather than replacing it with a rectangle. Existing `box`/`bbox` metadata is synchronized, while text, IDs, confidence scores, wrappers, and all other JSON fields are preserved.
+
+Image bounds come from `image_width`/`image_height`, optional `image`, or RapidOCR wrapper `width`/`height`. Set `clip_to_image=false` to allow output coordinates outside the image.
+
+### RapidOCR JSON Polygon A-B Based Extend
+
+Expand polygons in JSON B while treating polygons in `A - B` as protected obstacles. It follows the same independent, side-wise behavior as **DeepSeek OCR Expand Subset BBox**, but consumes and returns RapidOCR polygon JSON:
+
+- B polygons do not block each other
+- left/right/top/bottom expand independently up to `max_expand`
+- `safety_margin` inflates protected A-B regions
+- `ignore_empty_text_in_a` excludes A detections with blank `text` from obstacles
+- B's JSON structure and metadata are preserved
+- image dimensions can be supplied manually, by optional `image`, or by `width`/`height` in the JSON wrapper
 
 ### DeepSeek OCR Expand Subset BBox (Paste Text)
 
