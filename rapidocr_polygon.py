@@ -176,6 +176,59 @@ def _effective_image_size(
     return infer_image_size(value)
 
 
+def _apply_image_edge_margin(
+    expanded_boxes: Sequence[Sequence[float]],
+    source_boxes: Sequence[Sequence[float]],
+    image_size: Optional[Tuple[int, int]],
+    coord_base: int,
+    image_edge_margin: float,
+) -> List[Box]:
+    """Keep newly expanded edges away from image borders without shrinking B.
+
+    ``image_edge_margin`` is always measured in pixels. If an original polygon
+    is already inside the safety area, that side remains at its original edge;
+    the safety parameter only limits new expansion and never shrinks input.
+    """
+    margin = max(0.0, float(image_edge_margin))
+    if margin <= 0:
+        return [[float(value) for value in box[:4]] for box in expanded_boxes]
+    if image_size is None:
+        raise ValueError(
+            "image_edge_margin requires image dimensions from image_width/"
+            "image_height, an attached image, or RapidOCR JSON width/height metadata"
+        )
+
+    width, height = image_size
+    if width <= 0 or height <= 0:
+        raise ValueError("image_edge_margin requires positive image dimensions")
+
+    base = max(0, int(coord_base or 0))
+    if base > 0:
+        safe_left = margin * float(base) / float(width)
+        safe_top = margin * float(base) / float(height)
+        safe_right = float(base) - safe_left
+        safe_bottom = float(base) - safe_top
+    else:
+        safe_left = margin
+        safe_top = margin
+        safe_right = float(width) - margin
+        safe_bottom = float(height) - margin
+
+    output: List[Box] = []
+    for expanded, source in zip(expanded_boxes, source_boxes):
+        ex1, ey1, ex2, ey2 = [float(value) for value in expanded[:4]]
+        sx1, sy1, sx2, sy2 = [float(value) for value in source[:4]]
+
+        # If a source side already violates the requested safety distance, keep
+        # that side unchanged rather than moving it inward and shrinking content.
+        x1 = max(ex1, safe_left) if sx1 >= safe_left else sx1
+        y1 = max(ey1, safe_top) if sy1 >= safe_top else sy1
+        x2 = min(ex2, safe_right) if sx2 <= safe_right else sx2
+        y2 = min(ey2, safe_bottom) if sy2 <= safe_bottom else sy2
+        output.append([x1, y1, x2, y2])
+    return output
+
+
 def extend_polygon_json(
     value: Any,
     *,
@@ -183,6 +236,7 @@ def extend_polygon_json(
     image_size: Optional[Tuple[int, int]] = None,
     coord_base: int = 0,
     clip_to_image: bool = True,
+    image_edge_margin: float = 0,
 ) -> Any:
     """Expand every polygon independently while preserving the JSON shape."""
     output = parse_json_value(value)
@@ -192,16 +246,24 @@ def extend_polygon_json(
 
     boxes = [polygon_box(points) for _record, _key, points in records]
     effective_size = _effective_image_size(output, image_size)
+    coord_base_value = max(0, int(coord_base or 0))
     expanded_boxes = expand_subset_bboxes(
         boxes,
         boxes,
         image_size=effective_size,
         max_expand=max(0.0, float(expand)),
         safety_margin=0,
-        coord_base=max(0, int(coord_base or 0)),
+        coord_base=coord_base_value,
         round_output=False,
         clip_to_image=bool(clip_to_image),
         ignore_empty_label_in_a=False,
+    )
+    expanded_boxes = _apply_image_edge_margin(
+        expanded_boxes,
+        boxes,
+        effective_size,
+        coord_base_value,
+        image_edge_margin,
     )
     _apply_expanded_boxes(records, expanded_boxes)
     return output
@@ -217,6 +279,7 @@ def extend_polygon_subset_json(
     coord_base: int = 0,
     clip_to_image: bool = True,
     ignore_empty_text_in_a: bool = True,
+    image_edge_margin: float = 0,
 ) -> Any:
     """Expand B polygons while treating polygons in A - B as obstacles."""
     parsed_a = parse_json_value(value_a)
@@ -239,16 +302,24 @@ def extend_polygon_subset_json(
     if effective_size is None:
         effective_size = _effective_image_size(output_b, image_size)
 
+    coord_base_value = max(0, int(coord_base or 0))
     expanded_boxes = expand_subset_bboxes(
         boxes_a,
         boxes_b,
         image_size=effective_size,
         max_expand=max(0.0, float(max_expand)),
         safety_margin=max(0.0, float(safety_margin)),
-        coord_base=max(0, int(coord_base or 0)),
+        coord_base=coord_base_value,
         round_output=False,
         clip_to_image=bool(clip_to_image),
         ignore_empty_label_in_a=False,
+    )
+    expanded_boxes = _apply_image_edge_margin(
+        expanded_boxes,
+        boxes_b,
+        effective_size,
+        coord_base_value,
+        image_edge_margin,
     )
     _apply_expanded_boxes(records_b, expanded_boxes)
     return output_b

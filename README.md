@@ -210,7 +210,7 @@ Output:
 
 Expand every polygon independently by up to `expand` pixels on each side. The original polygon is mapped into its expanded enclosing rectangle, preserving rotated or skewed polygon geometry rather than replacing it with a rectangle. Existing `box`/`bbox` metadata is synchronized, while text, IDs, confidence scores, wrappers, and all other JSON fields are preserved.
 
-Image bounds come from `image_width`/`image_height`, optional `image`, or RapidOCR wrapper `width`/`height`. Set `clip_to_image=false` to allow output coordinates outside the image.
+Image bounds come from `image_width`/`image_height`, optional `image`, or RapidOCR wrapper `width`/`height`. Set `clip_to_image=false` to allow output coordinates outside the image. `image_edge_margin` (default `0`) limits newly expanded polygon edges to remain this many pixels away from the image border. If an original polygon is already closer than the requested margin, it is not shrunk; that side simply remains unchanged. A positive margin requires known image dimensions.
 
 ### RapidOCR JSON Polygon A-B Based Extend
 
@@ -219,6 +219,7 @@ Expand polygons in JSON B while treating polygons in `A - B` as protected obstac
 - B polygons do not block each other
 - left/right/top/bottom expand independently up to `max_expand`
 - `safety_margin` inflates protected A-B regions
+- `image_edge_margin` keeps newly expanded edges the requested pixel distance from image borders without shrinking an original polygon that is already closer
 - `ignore_empty_text_in_a` excludes A detections with blank `text` from obstacles
 - B's JSON structure and metadata are preserved
 - image dimensions can be supplied manually, by optional `image`, or by `width`/`height` in the JSON wrapper

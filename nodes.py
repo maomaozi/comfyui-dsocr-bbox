@@ -1106,6 +1106,7 @@ class RapidOCRJSONPolygonExtend:
             "required": {
                 "json_data": ("STRING", {"forceInput": True}),
                 "expand": ("INT", {"default": 8, "min": 0, "max": 10000, "step": 1}),
+                "image_edge_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
@@ -1121,14 +1122,15 @@ class RapidOCRJSONPolygonExtend:
     FUNCTION = "extend_polygons"
     CATEGORY = "RapidOCR"
     DESCRIPTION = (
-        "Expands each RapidOCR polygon outward independently and preserves the "
-        "input JSON structure, text, IDs, scores, and other metadata."
+        "Expands each RapidOCR polygon outward independently, optionally keeps "
+        "new expansion away from image edges, and preserves JSON metadata."
     )
 
     def extend_polygons(
         self,
         json_data: Any,
         expand: int = 8,
+        image_edge_margin: int = 0,
         image_width: int = 0,
         image_height: int = 0,
         coord_base: int = 0,
@@ -1151,6 +1153,7 @@ class RapidOCRJSONPolygonExtend:
             image_size=image_size,
             coord_base=max(0, int(coord_base or 0)),
             clip_to_image=_to_bool(clip_to_image),
+            image_edge_margin=max(0, int(image_edge_margin or 0)),
         )
         return (dumps_json(output),)
 
@@ -1166,6 +1169,7 @@ class RapidOCRJSONPolygonABExtend:
                 "json_data_b": ("STRING", {"forceInput": True}),
                 "max_expand": ("INT", {"default": 100, "min": 0, "max": 10000, "step": 1}),
                 "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "image_edge_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "image_width": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "image_height": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
@@ -1182,8 +1186,8 @@ class RapidOCRJSONPolygonABExtend:
     FUNCTION = "extend_subset_polygons"
     CATEGORY = "RapidOCR"
     DESCRIPTION = (
-        "Expands polygons in RapidOCR JSON B up to max_expand while treating "
-        "polygons in A - B as protected obstacles. Output preserves B's JSON structure."
+        "Expands RapidOCR JSON B while avoiding A - B obstacles and optionally "
+        "keeps new expansion away from image edges. Preserves B's JSON structure."
     )
 
     def extend_subset_polygons(
@@ -1192,6 +1196,7 @@ class RapidOCRJSONPolygonABExtend:
         json_data_b: Any,
         max_expand: int = 100,
         safety_margin: int = 0,
+        image_edge_margin: int = 0,
         image_width: int = 0,
         image_height: int = 0,
         coord_base: int = 0,
@@ -1218,6 +1223,7 @@ class RapidOCRJSONPolygonABExtend:
             coord_base=max(0, int(coord_base or 0)),
             clip_to_image=_to_bool(clip_to_image),
             ignore_empty_text_in_a=_to_bool(ignore_empty_text_in_a),
+            image_edge_margin=max(0, int(image_edge_margin or 0)),
         )
         return (dumps_json(output),)
 

@@ -123,6 +123,48 @@ class TestJSONPolygonToMask(unittest.TestCase):
         polygon = json.loads(output_json)[0]["detections"][0]["polygon"]
         self.assertEqual(polygon, [[0, 0], [22, 0], [22, 23], [0, 23]])
 
+    def test_independent_extend_respects_image_edge_margin(self):
+        payload = [{
+            "text": "near edge",
+            "box": [12, 14, 30, 30],
+            "polygon": [[12, 14], [30, 14], [30, 30], [12, 30]],
+        }]
+        (output_json,) = RapidOCRJSONPolygonExtend().extend_polygons(
+            json.dumps(payload),
+            expand=20,
+            image_edge_margin=10,
+            image_width=50,
+            image_height=50,
+        )
+        output = json.loads(output_json)[0]
+        self.assertEqual(output["box"], [10, 10, 40, 40])
+        self.assertEqual(output["polygon"], [[10, 10], [40, 10], [40, 40], [10, 40]])
+
+    def test_edge_margin_does_not_shrink_polygon_already_inside_margin(self):
+        payload = [{
+            "text": "touching edge",
+            "polygon": [[2, 3], [12, 3], [12, 13], [2, 13]],
+        }]
+        (output_json,) = RapidOCRJSONPolygonExtend().extend_polygons(
+            json.dumps(payload),
+            expand=10,
+            image_edge_margin=8,
+            image_width=40,
+            image_height=30,
+        )
+        polygon = json.loads(output_json)[0]["polygon"]
+        self.assertEqual(polygon, [[2, 3], [22, 3], [22, 22], [2, 22]])
+
+    def test_positive_edge_margin_requires_image_dimensions(self):
+        payload = [{
+            "text": "no dimensions",
+            "polygon": [[10, 10], [20, 10], [20, 20], [10, 20]],
+        }]
+        with self.assertRaisesRegex(ValueError, "image_edge_margin requires image dimensions"):
+            RapidOCRJSONPolygonExtend().extend_polygons(
+                json.dumps(payload), expand=5, image_edge_margin=3
+            )
+
     def test_ab_extend_avoids_a_minus_b_and_preserves_b_json(self):
         selected = {
             "id": "selected",
@@ -154,6 +196,22 @@ class TestJSONPolygonToMask(unittest.TestCase):
             output[0]["polygon"],
             [[10, 10], [40, 10], [40, 50], [10, 50]],
         )
+
+    def test_ab_extend_respects_image_edge_margin(self):
+        selected = {
+            "text": "selected",
+            "polygon": [[12, 14], [30, 14], [30, 30], [12, 30]],
+        }
+        (output_json,) = RapidOCRJSONPolygonABExtend().extend_subset_polygons(
+            json.dumps([selected]),
+            json.dumps([selected]),
+            max_expand=20,
+            image_edge_margin=10,
+            image_width=50,
+            image_height=50,
+        )
+        polygon = json.loads(output_json)[0]["polygon"]
+        self.assertEqual(polygon, [[10, 10], [40, 10], [40, 40], [10, 40]])
 
     def test_ab_extend_can_ignore_empty_text_obstacle(self):
         selected = {
