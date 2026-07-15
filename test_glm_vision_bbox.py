@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from glm_vision_bbox import GLMBBoxJSONToMask, parse_bbox_json
+from glm_vision_bbox import GLMBBoxJSONToMask, GLMVisionBBoxExtractor, _build_api_prompt, parse_bbox_json
 
 
 class TestGLMVisionBBox(unittest.TestCase):
@@ -38,6 +38,24 @@ class TestGLMVisionBBox(unittest.TestCase):
         source = '[{"desc":"店铺","class":"店铺","bbox":[802,696,938,811]}]'
         result = parse_bbox_json(source, width=472, height=466, coord_base=1000)
         self.assertEqual(result[0]["bbox"], [379, 324, 443, 378])
+
+    def test_extractor_coord_base_defaults_to_1000(self):
+        coord_input = GLMVisionBBoxExtractor.INPUT_TYPES()["required"]["coord_base"]
+        self.assertEqual(coord_input[0], "INT")
+        self.assertEqual(coord_input[1]["default"], 1000)
+        self.assertEqual(coord_input[1]["min"], 0)
+
+    def test_api_prompt_uses_configured_coordinate_base(self):
+        prompt = _build_api_prompt("检测 logo", coord_base=2000, width=640, height=480)
+        self.assertIn("0-2000 归一化坐标", prompt)
+        self.assertIn("(2000,2000)", prompt)
+
+    def test_api_prompt_uses_pixel_coordinates_when_base_is_zero(self):
+        prompt = _build_api_prompt("检测 logo", coord_base=0, width=640, height=480)
+        self.assertIn("原图像素坐标", prompt)
+        self.assertIn("原图宽 640 像素、高 480 像素", prompt)
+        self.assertIn("x2 <= 640", prompt)
+        self.assertIn("y2 <= 480", prompt)
 
     def test_mask_uses_pixel_coordinates_and_fixed_expansion(self):
         image = torch.zeros((1, 30, 40, 3), dtype=torch.float32)

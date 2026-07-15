@@ -18,10 +18,12 @@ OpenAI-compatible vision chat-completions API. Defaults:
 - `endpoint`: `https://open.bigmodel.cn/api/paas/v4/chat/completions`
 - `model`: `glm-4.6v-flash`
 - `api_key`: entered on the node; no key is stored in this repository
+- `coord_base`: coordinate base requested from GLM, default `1000`; set to `0` to request source-image pixel coordinates
 
-The prompt can be entered directly on the node. The node asks GLM for its native
-`0-1000` visual-grounding coordinates, validates the response, converts coordinates
-to source-image pixels, clamps them to the image, and outputs only normalized JSON:
+The prompt can be entered directly on the node. With a positive `coord_base`, the node
+asks GLM for coordinates normalized to that base and converts them to source-image
+pixels. With `coord_base=0`, it asks GLM for pixel coordinates directly. The result is
+validated, clamped to the image, and always output as pixel-coordinate JSON:
 
 ```json
 [
