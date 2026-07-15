@@ -324,7 +324,7 @@ def request_glm_bbox(
                 ],
             }
         ],
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
         "stream": False,
     }
     request = urllib.request.Request(
