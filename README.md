@@ -5,6 +5,53 @@ A small ComfyUI custom node that draws bounding boxes from DeepSeek OCR output, 
 DeepSeek OCR coordinates are usually normalized to `0-1000`; keep `coord_base=1000`.
 Set `coord_base=0` only when your OCR coordinates are already pixel coordinates.
 
+## GLM Vision BBox nodes
+
+Both new nodes are grouped under the ComfyUI category **`dsocr_bbox/GLM Vision BBox`**.
+They use only Python's standard HTTP library, so this API integration adds no package dependency.
+
+### GLM Vision BBox Extractor
+
+Sends exactly one ComfyUI `IMAGE` and an editable multiline prompt to a configurable
+OpenAI-compatible vision chat-completions API. Defaults:
+
+- `endpoint`: `https://open.bigmodel.cn/api/paas/v4/chat/completions`
+- `model`: `glm-4.6v-flash`
+- `api_key`: entered on the node; no key is stored in this repository
+
+The prompt can be entered directly on the node. The node asks GLM for its native
+`0-1000` visual-grounding coordinates, validates the response, converts coordinates
+to source-image pixels, clamps them to the image, and outputs only normalized JSON:
+
+```json
+[
+  {
+    "desc": "official flagship store",
+    "class": "store",
+    "bbox": [x1, y1, x2, y2]
+  }
+]
+```
+
+Markdown fences or surrounding prose accidentally emitted by a model are stripped.
+Malformed items and invalid/zero-area boxes are omitted. The node rejects image batches
+larger than one because its API contract is one image per call.
+
+### GLM BBox JSON To Mask
+
+Consumes the extractor's pixel-coordinate `bbox_json` plus the source `image`, and
+outputs a native ComfyUI `MASK` (`float32`, `[batch,height,width]`). `mask_expand` is a
+fixed pixel value added independently to all four sides of every bbox and clipped to
+the image boundary. Use `0` for no expansion.
+
+Typical workflow:
+
+```text
+Load Image -> GLM Vision BBox Extractor -> GLM BBox JSON To Mask
+     |                                      ^
+     +--------------------------------------+
+```
+
 ## Modular OCR business-mask pipeline
 
 The business filtering and region expansion are split into independent nodes, so a text or multimodal LLM can be inserted without rerunning OCR:

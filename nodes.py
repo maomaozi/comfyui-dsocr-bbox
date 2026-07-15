@@ -25,6 +25,7 @@ try:
         OCRBusinessReviewPrompt,
         OCRBusinessRuleClassifier,
     )
+    from .glm_vision_bbox import GLMBBoxJSONToMask, GLMVisionBBoxExtractor
 except Exception:
     from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
     from rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
@@ -42,6 +43,7 @@ except Exception:
         OCRBusinessReviewPrompt,
         OCRBusinessRuleClassifier,
     )
+    from glm_vision_bbox import GLMBBoxJSONToMask, GLMVisionBBoxExtractor
 
 
 _REF_DET_RE = re.compile(
@@ -1319,6 +1321,8 @@ NODE_CLASS_MAPPINGS = {
     "OCRBusinessReviewPrompt": OCRBusinessReviewPrompt,
     "OCRApplyBusinessDecisions": OCRApplyBusinessDecisions,
     "OCRBusinessRegionsToMask": OCRBusinessRegionsToMask,
+    "GLMVisionBBoxExtractor": GLMVisionBBoxExtractor,
+    "GLMBBoxJSONToMask": GLMBBoxJSONToMask,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1337,4 +1341,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OCRBusinessReviewPrompt": "OCR Business LLM Review Prompt",
     "OCRApplyBusinessDecisions": "OCR Apply Business Decisions",
     "OCRBusinessRegionsToMask": "OCR Business Regions To Mask",
+    "GLMVisionBBoxExtractor": "GLM Vision BBox Extractor",
+    "GLMBBoxJSONToMask": "GLM BBox JSON To Mask",
 }
