@@ -54,7 +54,28 @@ class TestGLMVisionBBox(unittest.TestCase):
         self.assertEqual(mask[0, 19, 10].item(), 0.0)
         self.assertEqual(mask[0, 40, 29].item(), 0.0)
 
-    def test_mask_uses_pixel_coordinates_and_fixed_expansion(self):
+    def test_mask_expansion_uses_coord_base_units(self):
+        bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[200,300,400,500]}]'
+
+        small_image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
+        (small_mask,) = GLMBBoxJSONToMask().json_to_mask(
+            small_image, bbox_json, mask_expand=100, coord_base=1000
+        )
+        self.assertEqual(small_mask[0, 16, 10].item(), 1.0)
+        self.assertEqual(small_mask[0, 47, 49].item(), 1.0)
+        self.assertEqual(small_mask[0, 15, 10].item(), 0.0)
+        self.assertEqual(small_mask[0, 48, 49].item(), 0.0)
+
+        large_image = torch.zeros((1, 160, 200, 3), dtype=torch.float32)
+        (large_mask,) = GLMBBoxJSONToMask().json_to_mask(
+            large_image, bbox_json, mask_expand=100, coord_base=1000
+        )
+        self.assertEqual(large_mask[0, 32, 20].item(), 1.0)
+        self.assertEqual(large_mask[0, 95, 99].item(), 1.0)
+        self.assertEqual(large_mask[0, 31, 20].item(), 0.0)
+        self.assertEqual(large_mask[0, 96, 99].item(), 0.0)
+
+    def test_mask_uses_pixel_coordinates_and_pixel_expansion_when_base_is_zero(self):
         image = torch.zeros((1, 30, 40, 3), dtype=torch.float32)
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[10,10,20,20]}]'
         (mask,) = GLMBBoxJSONToMask().json_to_mask(

@@ -433,7 +433,7 @@ class GLMVisionBBoxExtractor:
 
 
 class GLMBBoxJSONToMask:
-    """Rasterize GLM bbox JSON and expand all sides by a fixed pixel value."""
+    """Rasterize GLM bbox JSON with expansion in its configured coordinate space."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -451,8 +451,8 @@ class GLMBBoxJSONToMask:
     FUNCTION = "json_to_mask"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. Positive "
-        "coord_base values are converted to pixels; 0 treats coordinates as pixels."
+        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. Coordinates "
+        "and mask_expand use coord_base units; 0 treats both as pixels."
     )
 
     def json_to_mask(
@@ -464,19 +464,23 @@ class GLMBBoxJSONToMask:
     ):
         batch = _normalize_image_batch(image)
         batch_size, height, width = int(batch.shape[0]), int(batch.shape[1]), int(batch.shape[2])
-        records = parse_bbox_json(
-            bbox_json, width=width, height=height, coord_base=max(0, int(coord_base or 0))
-        )
-        padding = max(0, int(mask_expand or 0))
+        base = max(0, int(coord_base or 0))
+        records = parse_bbox_json(bbox_json, width=width, height=height, coord_base=base)
+        expand = max(0, int(mask_expand or 0))
+        if base > 0:
+            padding_x = int(round(expand * float(width) / float(base)))
+            padding_y = int(round(expand * float(height) / float(base)))
+        else:
+            padding_x = padding_y = expand
 
         canvas = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(canvas)
         for record in records:
             x1, y1, x2, y2 = record["bbox"]
-            x1 = max(0, x1 - padding)
-            y1 = max(0, y1 - padding)
-            x2 = min(width, x2 + padding)
-            y2 = min(height, y2 + padding)
+            x1 = max(0, x1 - padding_x)
+            y1 = max(0, y1 - padding_y)
+            x2 = min(width, x2 + padding_x)
+            y2 = min(height, y2 + padding_y)
             if x2 > x1 and y2 > y1:
                 # PIL's rectangle end is inclusive; bbox coordinates are half-open.
                 draw.rectangle((x1, y1, x2 - 1, y2 - 1), fill=255)
