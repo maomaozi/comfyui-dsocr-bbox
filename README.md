@@ -18,12 +18,10 @@ OpenAI-compatible vision chat-completions API. Defaults:
 - `endpoint`: `https://open.bigmodel.cn/api/paas/v4/chat/completions`
 - `model`: `glm-4.6v-flash`
 - `api_key`: entered on the node; no key is stored in this repository
-- `coord_base`: coordinate base requested from GLM, default `1000`; set to `0` to request source-image pixel coordinates
 
-The prompt can be entered directly on the node. With a positive `coord_base`, the node
-asks GLM for coordinates normalized to that base and converts them to source-image
-pixels. With `coord_base=0`, it asks GLM for pixel coordinates directly. The result is
-validated, clamped to the image, and always output as pixel-coordinate JSON:
+The prompt can be entered directly on the node. The node asks GLM for its native
+`0-1000` visual-grounding coordinates, validates the response, converts coordinates
+to source-image pixels, clamps them to the image, and outputs only normalized JSON:
 
 ```json
 [
@@ -41,10 +39,13 @@ larger than one because its API contract is one image per call.
 
 ### GLM BBox JSON To Mask
 
-Consumes the extractor's pixel-coordinate `bbox_json` plus the source `image`, and
-outputs a native ComfyUI `MASK` (`float32`, `[batch,height,width]`). `mask_expand` is a
-fixed pixel value added independently to all four sides of every bbox and clipped to
-the image boundary. Use `0` for no expansion.
+Consumes `bbox_json` plus the source `image`, and outputs a native ComfyUI `MASK`
+(`float32`, `[batch,height,width]`). `coord_base` controls the input coordinate system:
+it defaults to `1000` for GLM normalized coordinates; set it to `0` when the JSON
+already uses source-image pixel coordinates. The extractor above currently outputs
+pixel coordinates, so set `coord_base=0` when connecting these two nodes directly.
+`mask_expand` is a fixed pixel value added independently to all four sides of every
+bbox and clipped to the image boundary. Use `0` for no expansion.
 
 Typical workflow:
 

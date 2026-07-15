@@ -207,9 +207,9 @@ def _normalize_bbox(
     coord_base: int = 0,
 ) -> List[int] | None:
     x1, y1, x2, y2 = [float(value) for value in bbox[:4]]
-    # Positive coordinate bases are normalized spaces; zero means the values
-    # already use source-image pixels. Output is always exposed as pixels to
-    # downstream ComfyUI nodes.
+    # GLM visual grounding natively uses a 0-1000 coordinate space.  The API
+    # node requests that stable format, then converts it to source-image pixels
+    # before exposing JSON to downstream ComfyUI nodes.
     base = max(0, int(coord_base or 0))
     if base > 0:
         if width is None or height is None or width <= 0 or height <= 0:
@@ -278,34 +278,12 @@ def parse_bbox_json(
     return output
 
 
-def _build_api_prompt(
-    user_prompt: str,
-    coord_base: int = 1000,
-    width: int | None = None,
-    height: int | None = None,
-) -> str:
-    base = max(0, int(coord_base or 0))
-    if base > 0:
-        coordinate_requirements = (
-            f"1. bbox 使用 0-{base} 归一化坐标，左上角为 (0,0)，"
-            f"右下角为 ({base},{base})。\n"
-            f"2. 坐标必须满足 0 <= x1 < x2 <= {base}，"
-            f"0 <= y1 < y2 <= {base}。"
-        )
-    else:
-        if width is None or height is None or width <= 0 or height <= 0:
-            raise ValueError("pixel-coordinate prompting requires positive image dimensions")
-        coordinate_requirements = (
-            f"1. bbox 使用原图像素坐标，原图宽 {width} 像素、高 {height} 像素，"
-            f"左上角为 (0,0)，右下角为 ({width},{height})。\n"
-            f"2. 坐标必须满足 0 <= x1 < x2 <= {width}，"
-            f"0 <= y1 < y2 <= {height}。"
-        )
-
+def _build_api_prompt(user_prompt: str) -> str:
     return f"""{user_prompt.strip()}
 
 强制要求：
-{coordinate_requirements}
+1. bbox 使用 GLM 视觉定位的 0-1000 归一化坐标，左上角为 (0,0)，右下角为 (1000,1000)。
+2. 坐标必须满足 0 <= x1 < x2 <= 1000，0 <= y1 < y2 <= 1000。
 3. 每个元素只保留 desc、class、bbox 三个字段。
 4. 用户提示词中的 JSON/“官方旗舰店”仅是输出结构示例，不代表图中真实内容；禁止照抄示例，必须以图片为准。
 5. 严格按照用户指定的目标范围检测；如果用户列出了类别，只输出这些类别，不要自行加入无关的产品、规格或功能类别。
@@ -319,9 +297,8 @@ def request_glm_bbox(
     model: str,
     api_key: str,
     timeout: int = 300,
-    coord_base: int = 1000,
 ) -> str:
-    """Call GLM and return a pixel-coordinate, pretty-printed JSON list."""
+    """Call GLM and return a normalized, pretty-printed JSON list."""
     endpoint = str(endpoint or "").strip()
     model = str(model or "").strip()
     api_key = str(api_key or "").strip()
@@ -334,7 +311,6 @@ def request_glm_bbox(
         raise ValueError("api_key cannot be empty")
     if not prompt:
         raise ValueError("prompt cannot be empty")
-    base = max(0, int(coord_base or 0))
 
     image_base64, width, height = _image_as_base64_png(image)
     payload = {
@@ -344,10 +320,7 @@ def request_glm_bbox(
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": image_base64}},
-                    {
-                        "type": "text",
-                        "text": _build_api_prompt(prompt, coord_base=base, width=width, height=height),
-                    },
+                    {"type": "text", "text": _build_api_prompt(prompt)},
                 ],
             }
         ],
@@ -414,7 +387,7 @@ def request_glm_bbox(
     raw_text = _content_as_text(message.get("content"))
     if not raw_text:
         raw_text = _content_as_text(message.get("reasoning_content"))
-    records = parse_bbox_json(raw_text, width=width, height=height, coord_base=base)
+    records = parse_bbox_json(raw_text, width=width, height=height, coord_base=1000)
     return json.dumps(records, ensure_ascii=False, indent=2)
 
 
@@ -430,7 +403,6 @@ class GLMVisionBBoxExtractor:
                 "endpoint": ("STRING", {"default": DEFAULT_ENDPOINT}),
                 "model": ("STRING", {"default": DEFAULT_MODEL}),
                 "api_key": ("STRING", {"default": "", "password": True}),
-                "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
             }
         }
 
@@ -450,21 +422,18 @@ class GLMVisionBBoxExtractor:
         endpoint: str = DEFAULT_ENDPOINT,
         model: str = DEFAULT_MODEL,
         api_key: str = "",
-        coord_base: int = 1000,
     ):
         batch = _normalize_image_batch(image)
         if int(batch.shape[0]) != 1:
             raise ValueError(
                 f"GLM Vision BBox Extract supports exactly one image, received batch size {batch.shape[0]}"
             )
-        result = request_glm_bbox(
-            batch[0], prompt, endpoint, model, api_key, coord_base=coord_base
-        )
+        result = request_glm_bbox(batch[0], prompt, endpoint, model, api_key)
         return (result,)
 
 
 class GLMBBoxJSONToMask:
-    """Rasterize GLM pixel bbox JSON and expand all sides by a fixed value."""
+    """Rasterize GLM bbox JSON and expand all sides by a fixed pixel value."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -473,6 +442,7 @@ class GLMBBoxJSONToMask:
                 "image": ("IMAGE",),
                 "bbox_json": ("STRING", {"forceInput": True}),
                 "mask_expand": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
             }
         }
 
@@ -481,8 +451,8 @@ class GLMBBoxJSONToMask:
     FUNCTION = "json_to_mask"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK and expands "
-        "every bbox by the configured fixed number of pixels."
+        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. Positive "
+        "coord_base values are converted to pixels; 0 treats coordinates as pixels."
     )
 
     def json_to_mask(
@@ -490,10 +460,13 @@ class GLMBBoxJSONToMask:
         image: torch.Tensor,
         bbox_json: Any,
         mask_expand: int = 0,
+        coord_base: int = 1000,
     ):
         batch = _normalize_image_batch(image)
         batch_size, height, width = int(batch.shape[0]), int(batch.shape[1]), int(batch.shape[2])
-        records = parse_bbox_json(bbox_json, width=width, height=height)
+        records = parse_bbox_json(
+            bbox_json, width=width, height=height, coord_base=max(0, int(coord_base or 0))
+        )
         padding = max(0, int(mask_expand or 0))
 
         canvas = Image.new("L", (width, height), 0)
