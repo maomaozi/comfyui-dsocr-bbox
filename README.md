@@ -44,11 +44,12 @@ Consumes `bbox_json` plus the source `image`, and outputs a native ComfyUI `MASK
 it defaults to `1000` for GLM normalized coordinates; set it to `0` when the JSON
 already uses source-image pixel coordinates. The extractor above currently outputs
 pixel coordinates, so set `coord_base=0` when connecting these two nodes directly.
-`mask_expand` is an image-size percentage independent of `coord_base`: for example,
-`mask_expand=10` expands the bbox by 10% of the image width on each horizontal side
-and 10% of the image height on each vertical side. Decimal percentages are supported
-(the input step is `0.1`). All expanded boxes are clipped to the image boundary; use
-`mask_expand=0` for no expansion.
+`horizontal_expand` and `vertical_expand` are image-size percentages independent of
+`coord_base`. For example, `horizontal_expand=10` expands the bbox by 10% of the image
+width on both the left and right, while `vertical_expand=5` expands it by 5% of the
+image height on both the top and bottom. Decimal percentages are supported (the input
+step is `0.1`). All expanded boxes are clipped to the image boundary; set both values
+to `0` for no expansion.
 
 Typical workflow:
 

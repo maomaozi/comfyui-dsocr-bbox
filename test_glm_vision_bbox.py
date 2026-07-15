@@ -39,22 +39,23 @@ class TestGLMVisionBBox(unittest.TestCase):
         result = parse_bbox_json(source, width=472, height=466, coord_base=1000)
         self.assertEqual(result[0]["bbox"], [379, 324, 443, 378])
 
-    def test_mask_inputs_use_coord_base_and_percentage_expansion(self):
+    def test_mask_inputs_use_coord_base_and_separate_percentage_expansion(self):
         required = GLMBBoxJSONToMask.INPUT_TYPES()["required"]
         coord_input = required["coord_base"]
         self.assertEqual(coord_input[0], "INT")
         self.assertEqual(coord_input[1]["default"], 1000)
         self.assertEqual(coord_input[1]["min"], 0)
 
-        expand_input = required["mask_expand"]
-        self.assertEqual(expand_input[0], "FLOAT")
-        self.assertEqual(expand_input[1]["default"], 0.0)
-        self.assertEqual(expand_input[1]["step"], 0.1)
+        for name in ("horizontal_expand", "vertical_expand"):
+            expand_input = required[name]
+            self.assertEqual(expand_input[0], "FLOAT")
+            self.assertEqual(expand_input[1]["default"], 0.0)
+            self.assertEqual(expand_input[1]["step"], 0.1)
 
     def test_mask_converts_1000_coordinates_to_pixels(self):
         image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[100,250,300,500]}]'
-        (mask,) = GLMBBoxJSONToMask().json_to_mask(image, bbox_json, mask_expand=0)
+        (mask,) = GLMBBoxJSONToMask().json_to_mask(image, bbox_json, horizontal_expand=0, vertical_expand=0)
         self.assertEqual(mask[0, 20, 10].item(), 1.0)
         self.assertEqual(mask[0, 39, 29].item(), 1.0)
         self.assertEqual(mask[0, 19, 10].item(), 0.0)
@@ -65,7 +66,7 @@ class TestGLMVisionBBox(unittest.TestCase):
 
         small_image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
         (small_mask,) = GLMBBoxJSONToMask().json_to_mask(
-            small_image, bbox_json, mask_expand=10.0, coord_base=1000
+            small_image, bbox_json, horizontal_expand=10.0, vertical_expand=10.0, coord_base=1000
         )
         self.assertEqual(small_mask[0, 16, 10].item(), 1.0)
         self.assertEqual(small_mask[0, 47, 49].item(), 1.0)
@@ -74,7 +75,7 @@ class TestGLMVisionBBox(unittest.TestCase):
 
         large_image = torch.zeros((1, 160, 200, 3), dtype=torch.float32)
         (large_mask,) = GLMBBoxJSONToMask().json_to_mask(
-            large_image, bbox_json, mask_expand=10.0, coord_base=1000
+            large_image, bbox_json, horizontal_expand=10.0, vertical_expand=10.0, coord_base=1000
         )
         self.assertEqual(large_mask[0, 32, 20].item(), 1.0)
         self.assertEqual(large_mask[0, 95, 99].item(), 1.0)
@@ -85,7 +86,7 @@ class TestGLMVisionBBox(unittest.TestCase):
         image = torch.zeros((1, 30, 40, 3), dtype=torch.float32)
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[10,10,20,20]}]'
         (mask,) = GLMBBoxJSONToMask().json_to_mask(
-            image, bbox_json, mask_expand=10.0, coord_base=0
+            image, bbox_json, horizontal_expand=10.0, vertical_expand=10.0, coord_base=0
         )
         self.assertEqual(tuple(mask.shape), (1, 30, 40))
         self.assertEqual(mask.dtype, torch.float32)
@@ -94,11 +95,24 @@ class TestGLMVisionBBox(unittest.TestCase):
         self.assertEqual(mask[0, 6, 6].item(), 0.0)
         self.assertEqual(mask[0, 23, 23].item(), 0.0)
 
+    def test_horizontal_and_vertical_expansion_are_independent(self):
+        image = torch.zeros((1, 100, 200, 3), dtype=torch.float32)
+        bbox_json = '[{"bbox":[50,30,100,60]}]'
+        (mask,) = GLMBBoxJSONToMask().json_to_mask(
+            image, bbox_json, horizontal_expand=10.0, vertical_expand=5.0, coord_base=0
+        )
+        self.assertEqual(mask[0, 25, 30].item(), 1.0)
+        self.assertEqual(mask[0, 64, 119].item(), 1.0)
+        self.assertEqual(mask[0, 24, 30].item(), 0.0)
+        self.assertEqual(mask[0, 25, 29].item(), 0.0)
+        self.assertEqual(mask[0, 65, 119].item(), 0.0)
+        self.assertEqual(mask[0, 64, 120].item(), 0.0)
+
     def test_mask_expansion_accepts_fractional_percentages(self):
         image = torch.zeros((1, 200, 400, 3), dtype=torch.float32)
         bbox_json = '[{"bbox":[100,50,200,100]}]'
         (mask,) = GLMBBoxJSONToMask().json_to_mask(
-            image, bbox_json, mask_expand=0.5, coord_base=0
+            image, bbox_json, horizontal_expand=0.5, vertical_expand=0.5, coord_base=0
         )
         self.assertEqual(mask[0, 49, 98].item(), 1.0)
         self.assertEqual(mask[0, 100, 201].item(), 1.0)
@@ -107,7 +121,7 @@ class TestGLMVisionBBox(unittest.TestCase):
 
     def test_mask_repeats_for_image_batch(self):
         image = torch.zeros((2, 10, 12, 3), dtype=torch.float32)
-        (mask,) = GLMBBoxJSONToMask().json_to_mask(image, '[]', mask_expand=0)
+        (mask,) = GLMBBoxJSONToMask().json_to_mask(image, '[]', horizontal_expand=0, vertical_expand=0)
         self.assertEqual(tuple(mask.shape), (2, 10, 12))
         self.assertTrue(torch.equal(mask[0], mask[1]))
 
