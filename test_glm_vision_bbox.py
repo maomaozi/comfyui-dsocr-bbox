@@ -39,11 +39,17 @@ class TestGLMVisionBBox(unittest.TestCase):
         result = parse_bbox_json(source, width=472, height=466, coord_base=1000)
         self.assertEqual(result[0]["bbox"], [379, 324, 443, 378])
 
-    def test_mask_coord_base_defaults_to_1000(self):
-        coord_input = GLMBBoxJSONToMask.INPUT_TYPES()["required"]["coord_base"]
+    def test_mask_inputs_use_coord_base_and_percentage_expansion(self):
+        required = GLMBBoxJSONToMask.INPUT_TYPES()["required"]
+        coord_input = required["coord_base"]
         self.assertEqual(coord_input[0], "INT")
         self.assertEqual(coord_input[1]["default"], 1000)
         self.assertEqual(coord_input[1]["min"], 0)
+
+        expand_input = required["mask_expand"]
+        self.assertEqual(expand_input[0], "FLOAT")
+        self.assertEqual(expand_input[1]["default"], 0.0)
+        self.assertEqual(expand_input[1]["step"], 0.1)
 
     def test_mask_converts_1000_coordinates_to_pixels(self):
         image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
@@ -54,12 +60,12 @@ class TestGLMVisionBBox(unittest.TestCase):
         self.assertEqual(mask[0, 19, 10].item(), 0.0)
         self.assertEqual(mask[0, 40, 29].item(), 0.0)
 
-    def test_mask_expansion_uses_coord_base_units(self):
+    def test_mask_expansion_uses_percentage_of_image_dimensions(self):
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[200,300,400,500]}]'
 
         small_image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
         (small_mask,) = GLMBBoxJSONToMask().json_to_mask(
-            small_image, bbox_json, mask_expand=100, coord_base=1000
+            small_image, bbox_json, mask_expand=10.0, coord_base=1000
         )
         self.assertEqual(small_mask[0, 16, 10].item(), 1.0)
         self.assertEqual(small_mask[0, 47, 49].item(), 1.0)
@@ -68,25 +74,36 @@ class TestGLMVisionBBox(unittest.TestCase):
 
         large_image = torch.zeros((1, 160, 200, 3), dtype=torch.float32)
         (large_mask,) = GLMBBoxJSONToMask().json_to_mask(
-            large_image, bbox_json, mask_expand=100, coord_base=1000
+            large_image, bbox_json, mask_expand=10.0, coord_base=1000
         )
         self.assertEqual(large_mask[0, 32, 20].item(), 1.0)
         self.assertEqual(large_mask[0, 95, 99].item(), 1.0)
         self.assertEqual(large_mask[0, 31, 20].item(), 0.0)
         self.assertEqual(large_mask[0, 96, 99].item(), 0.0)
 
-    def test_mask_uses_pixel_coordinates_and_pixel_expansion_when_base_is_zero(self):
+    def test_mask_percentage_expansion_is_independent_of_coord_base(self):
         image = torch.zeros((1, 30, 40, 3), dtype=torch.float32)
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[10,10,20,20]}]'
         (mask,) = GLMBBoxJSONToMask().json_to_mask(
-            image, bbox_json, mask_expand=3, coord_base=0
+            image, bbox_json, mask_expand=10.0, coord_base=0
         )
         self.assertEqual(tuple(mask.shape), (1, 30, 40))
         self.assertEqual(mask.dtype, torch.float32)
-        self.assertEqual(mask[0, 7, 7].item(), 1.0)
-        self.assertEqual(mask[0, 22, 22].item(), 1.0)
-        self.assertEqual(mask[0, 6, 7].item(), 0.0)
-        self.assertEqual(mask[0, 23, 22].item(), 0.0)
+        self.assertEqual(mask[0, 7, 6].item(), 1.0)
+        self.assertEqual(mask[0, 22, 23].item(), 1.0)
+        self.assertEqual(mask[0, 6, 6].item(), 0.0)
+        self.assertEqual(mask[0, 23, 23].item(), 0.0)
+
+    def test_mask_expansion_accepts_fractional_percentages(self):
+        image = torch.zeros((1, 200, 400, 3), dtype=torch.float32)
+        bbox_json = '[{"bbox":[100,50,200,100]}]'
+        (mask,) = GLMBBoxJSONToMask().json_to_mask(
+            image, bbox_json, mask_expand=0.5, coord_base=0
+        )
+        self.assertEqual(mask[0, 49, 98].item(), 1.0)
+        self.assertEqual(mask[0, 100, 201].item(), 1.0)
+        self.assertEqual(mask[0, 48, 98].item(), 0.0)
+        self.assertEqual(mask[0, 101, 201].item(), 0.0)
 
     def test_mask_repeats_for_image_batch(self):
         image = torch.zeros((2, 10, 12, 3), dtype=torch.float32)

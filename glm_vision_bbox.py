@@ -2,7 +2,7 @@
 
 The API node uses the OpenAI-compatible Zhipu chat completions endpoint and
 returns a strict JSON list with pixel-coordinate bboxes.  The mask node consumes
-that list and expands every rectangle by a fixed number of pixels.
+that list and expands every rectangle by a percentage of the image dimensions.
 """
 
 from __future__ import annotations
@@ -433,7 +433,7 @@ class GLMVisionBBoxExtractor:
 
 
 class GLMBBoxJSONToMask:
-    """Rasterize GLM bbox JSON with expansion in its configured coordinate space."""
+    """Rasterize GLM bbox JSON with percentage-based expansion."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -441,7 +441,7 @@ class GLMBBoxJSONToMask:
             "required": {
                 "image": ("IMAGE",),
                 "bbox_json": ("STRING", {"forceInput": True}),
-                "mask_expand": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "mask_expand": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1}),
                 "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
             }
         }
@@ -452,26 +452,23 @@ class GLMBBoxJSONToMask:
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
         "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. Coordinates "
-        "and mask_expand use coord_base units; 0 treats both as pixels."
+        "use coord_base (0 means pixels); mask_expand is a percentage of image size."
     )
 
     def json_to_mask(
         self,
         image: torch.Tensor,
         bbox_json: Any,
-        mask_expand: int = 0,
+        mask_expand: float = 0.0,
         coord_base: int = 1000,
     ):
         batch = _normalize_image_batch(image)
         batch_size, height, width = int(batch.shape[0]), int(batch.shape[1]), int(batch.shape[2])
         base = max(0, int(coord_base or 0))
         records = parse_bbox_json(bbox_json, width=width, height=height, coord_base=base)
-        expand = max(0, int(mask_expand or 0))
-        if base > 0:
-            padding_x = int(round(expand * float(width) / float(base)))
-            padding_y = int(round(expand * float(height) / float(base)))
-        else:
-            padding_x = padding_y = expand
+        expand_percent = max(0.0, float(mask_expand or 0.0))
+        padding_x = int(round(expand_percent * float(width) / 100.0))
+        padding_y = int(round(expand_percent * float(height) / 100.0))
 
         canvas = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(canvas)
