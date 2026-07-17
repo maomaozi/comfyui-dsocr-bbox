@@ -69,10 +69,12 @@ disappears. Different B records are processed independently and do not block eac
 Bboxes are half-open: touching an A edge is allowed, but positive-area overlap is never
 returned, including at diagonal corners.
 
-Set `coord_base` to match the coordinate base requested in the extractor prompt: use `0`
-for pixels or a positive normalization base such as `1000`. This node currently expects
-`[x1,y1,x2,y2]` input. Its output is a canonical pixel-coordinate GLM JSON list and can
-feed `GLM BBox JSON To Mask` with that node's `coord_base=0` and x-first order.
+Set the shared `coord_base` to the base used by both inputs: use `0` for pixels or a
+positive normalization base such as `1000`. `coordinate_order_a` and
+`coordinate_order_b` independently select `[x1,y1,x2,y2]` or `[y1,x1,y2,x2]`, so each
+can match the prompt that produced its JSON, including two different Dual Extractor
+prompts. The output is always canonical x-first pixel-coordinate JSON and can feed
+`GLM BBox JSON To Mask` with that node's `coord_base=0` and x-first order.
 
 ### GLM BBox JSON To Mask
 

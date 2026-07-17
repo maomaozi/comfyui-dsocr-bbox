@@ -240,9 +240,16 @@ class TestGLMVisionBBox(unittest.TestCase):
                 "vertical_expand",
                 "safety_margin",
                 "coord_base",
+                "coordinate_order_a",
+                "coordinate_order_b",
             ),
         )
         self.assertEqual(required["coord_base"][1]["default"], 0)
+        for name in ("coordinate_order_a", "coordinate_order_b"):
+            self.assertEqual(
+                required[name][0],
+                ["x1,y1,x2,y2", "y1,x1,y2,x2"],
+            )
         self.assertEqual(GLMBBoxJSONProtectedExpand.RETURN_TYPES, ("STRING",))
         self.assertEqual(GLMBBoxJSONProtectedExpand.RETURN_NAMES, ("bbox_json",))
 
@@ -296,6 +303,37 @@ class TestGLMVisionBBox(unittest.TestCase):
                 {"desc": "b", "class": "target", "bbox": [110, 40, 120, 60]},
             ],
         )
+
+    def test_protected_expand_supports_independent_orders_on_portrait_image(self):
+        image = torch.zeros((1, 1024, 768, 3), dtype=torch.float32)
+        protected_x_first = '[{"bbox":[500,100,600,300]}]'
+        target_y_first = '[{"desc":"banner","class":"target","bbox":[100,500,300,700]}]'
+        (result_json,) = GLMBBoxJSONProtectedExpand().expand_protected(
+            image,
+            protected_x_first,
+            target_y_first,
+            coord_base=1000,
+            coordinate_order_a="x1,y1,x2,y2",
+            coordinate_order_b="y1,x1,y2,x2",
+        )
+        self.assertEqual(
+            json.loads(result_json),
+            [{"desc": "banner", "class": "target", "bbox": [461, 102, 538, 307]}],
+        )
+
+    def test_protected_expand_applies_y_first_order_to_protected_regions(self):
+        image = torch.zeros((1, 1024, 768, 3), dtype=torch.float32)
+        protected_y_first = '[{"bbox":[100,500,300,700]}]'
+        target_x_first = '[{"desc":"banner","class":"target","bbox":[500,100,600,300]}]'
+        (result_json,) = GLMBBoxJSONProtectedExpand().expand_protected(
+            image,
+            protected_y_first,
+            target_x_first,
+            coord_base=1000,
+            coordinate_order_a="y1,x1,y2,x2",
+            coordinate_order_b="x1,y1,x2,y2",
+        )
+        self.assertEqual(json.loads(result_json), [])
 
     def test_protected_expand_handles_empty_inputs_and_rejects_image_batch(self):
         node = GLMBBoxJSONProtectedExpand()

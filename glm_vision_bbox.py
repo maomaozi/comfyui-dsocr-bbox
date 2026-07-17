@@ -531,6 +531,8 @@ class GLMBBoxJSONProtectedExpand:
                 "vertical_expand": ("FLOAT", percentage.copy()),
                 "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "coordinate_order_a": (["x1,y1,x2,y2", "y1,x1,y2,x2"],),
+                "coordinate_order_b": (["x1,y1,x2,y2", "y1,x1,y2,x2"],),
             }
         }
 
@@ -539,8 +541,8 @@ class GLMBBoxJSONProtectedExpand:
     FUNCTION = "expand_protected"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Expands every B bbox horizontally and vertically by image-size percentages, "
-        "then removes all protected A regions. A B record may split or disappear."
+        "Interprets A and B with independent coordinate orders, expands every B bbox by "
+        "image-size percentages, then removes all protected A regions."
     )
 
     def expand_protected(
@@ -552,6 +554,8 @@ class GLMBBoxJSONProtectedExpand:
         vertical_expand: float = 0.0,
         safety_margin: int = 0,
         coord_base: int = 0,
+        coordinate_order_a: str = "x1,y1,x2,y2",
+        coordinate_order_b: str = "x1,y1,x2,y2",
     ):
         batch = _normalize_image_batch(image)
         if int(batch.shape[0]) != 1:
@@ -561,8 +565,20 @@ class GLMBBoxJSONProtectedExpand:
             )
         height, width = int(batch.shape[1]), int(batch.shape[2])
         base = max(0, int(coord_base or 0))
-        records_a = parse_bbox_json(bbox_json_a, width=width, height=height, coord_base=base)
-        records_b = parse_bbox_json(bbox_json_b, width=width, height=height, coord_base=base)
+        records_a = parse_bbox_json(
+            bbox_json_a,
+            width=width,
+            height=height,
+            coord_base=base,
+            coordinate_order=coordinate_order_a,
+        )
+        records_b = parse_bbox_json(
+            bbox_json_b,
+            width=width,
+            height=height,
+            coord_base=base,
+            coordinate_order=coordinate_order_b,
+        )
         expand_x = int(round(max(0.0, float(horizontal_expand or 0.0)) * float(width) / 100.0))
         expand_y = int(round(max(0.0, float(vertical_expand or 0.0)) * float(height) / 100.0))
         grouped_fragments = expand_bboxes_excluding_protected_regions(
