@@ -1,9 +1,16 @@
 import json
+import threading
 import unittest
+from unittest.mock import patch
 
 import torch
 
-from glm_vision_bbox import GLMBBoxJSONToMask, parse_bbox_json
+from glm_vision_bbox import (
+    GLMBBoxJSONProtectedExpand,
+    GLMBBoxJSONToMask,
+    GLMVisionBBoxDualExtractor,
+    parse_bbox_json,
+)
 
 
 class TestGLMVisionBBox(unittest.TestCase):
@@ -38,6 +45,195 @@ class TestGLMVisionBBox(unittest.TestCase):
         source = '[{"desc":"店铺","class":"店铺","bbox":[802,696,938,811]}]'
         result = parse_bbox_json(source, width=472, height=466, coord_base=1000)
         self.assertEqual(result[0]["bbox"], [379, 324, 443, 378])
+
+    def test_dual_extractor_schema(self):
+        required = GLMVisionBBoxDualExtractor.INPUT_TYPES()["required"]
+        self.assertEqual(
+            tuple(required),
+            ("image_1", "prompt_1", "image_2", "prompt_2", "endpoint", "model", "api_key"),
+        )
+        self.assertEqual(required["image_1"], ("IMAGE",))
+        self.assertEqual(required["image_2"], ("IMAGE",))
+        self.assertTrue(required["prompt_1"][1]["multiline"])
+        self.assertTrue(required["prompt_2"][1]["multiline"])
+        self.assertEqual(GLMVisionBBoxDualExtractor.RETURN_TYPES, ("STRING", "STRING"))
+        self.assertEqual(GLMVisionBBoxDualExtractor.RETURN_NAMES, ("bbox_json_1", "bbox_json_2"))
+
+    def test_dual_extractor_runs_concurrently_and_preserves_output_order(self):
+        image_1 = torch.full((1, 2, 3, 3), 0.1, dtype=torch.float32)
+        image_2 = torch.full((1, 4, 5, 3), 0.2, dtype=torch.float32)
+        barrier = threading.Barrier(2, timeout=2.0)
+        release_first = threading.Event()
+        calls = {}
+        calls_lock = threading.Lock()
+
+        def fake_request(image, prompt, endpoint, model, api_key):
+            with calls_lock:
+                calls[prompt] = (tuple(image.shape), float(image[0, 0, 0].item()), endpoint, model, api_key)
+            barrier.wait()
+            if prompt == "first prompt":
+                self.assertTrue(release_first.wait(timeout=2.0))
+                return "json-one"
+            release_first.set()
+            return "json-two"
+
+        with patch("glm_vision_bbox.request_glm_bbox", side_effect=fake_request) as request_mock:
+            result = GLMVisionBBoxDualExtractor().extract_dual(
+                image_1,
+                "first prompt",
+                image_2,
+                "second prompt",
+                endpoint="https://example.test/v1",
+                model="test-model",
+                api_key="secret",
+            )
+
+        self.assertEqual(result, ("json-one", "json-two"))
+        self.assertEqual(request_mock.call_count, 2)
+        self.assertEqual(
+            calls["first prompt"],
+            ((2, 3, 3), image_1[0, 0, 0, 0].item(), "https://example.test/v1", "test-model", "secret"),
+        )
+        self.assertEqual(
+            calls["second prompt"],
+            ((4, 5, 3), image_2[0, 0, 0, 0].item(), "https://example.test/v1", "test-model", "secret"),
+        )
+
+    def test_dual_extractor_validates_both_batches_before_requests(self):
+        valid = torch.zeros((1, 2, 3, 3), dtype=torch.float32)
+        invalid = torch.zeros((2, 2, 3, 3), dtype=torch.float32)
+        extractor = GLMVisionBBoxDualExtractor()
+
+        for image_1, image_2, input_name in (
+            (invalid, valid, "image_1"),
+            (valid, invalid, "image_2"),
+        ):
+            with self.subTest(input_name=input_name):
+                with patch("glm_vision_bbox.request_glm_bbox") as request_mock:
+                    with self.assertRaisesRegex(ValueError, input_name):
+                        extractor.extract_dual(image_1, "one", image_2, "two")
+                    request_mock.assert_not_called()
+
+    def test_dual_extractor_propagates_request_error_without_partial_output(self):
+        image = torch.zeros((1, 2, 3, 3), dtype=torch.float32)
+        barrier = threading.Barrier(2, timeout=2.0)
+
+        def fake_request(_image, prompt, _endpoint, _model, _api_key):
+            barrier.wait()
+            if prompt == "one":
+                raise RuntimeError("first request failed")
+            return "json-two"
+
+        with patch("glm_vision_bbox.request_glm_bbox", side_effect=fake_request) as request_mock:
+            with self.assertRaisesRegex(RuntimeError, "first request failed"):
+                GLMVisionBBoxDualExtractor().extract_dual(image, "one", image, "two")
+        self.assertEqual(request_mock.call_count, 2)
+
+    def test_dual_extractor_is_registered(self):
+        from nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+
+        self.assertIs(NODE_CLASS_MAPPINGS["GLMVisionBBoxDualExtractor"], GLMVisionBBoxDualExtractor)
+        self.assertEqual(
+            NODE_DISPLAY_NAME_MAPPINGS["GLMVisionBBoxDualExtractor"],
+            "GLM Vision BBox Dual Extractor",
+        )
+
+    def test_protected_expand_schema(self):
+        required = GLMBBoxJSONProtectedExpand.INPUT_TYPES()["required"]
+        self.assertEqual(
+            tuple(required),
+            (
+                "image",
+                "bbox_json_a",
+                "bbox_json_b",
+                "horizontal_expand",
+                "vertical_expand",
+                "safety_margin",
+                "coord_base",
+            ),
+        )
+        self.assertEqual(required["coord_base"][1]["default"], 0)
+        self.assertEqual(GLMBBoxJSONProtectedExpand.RETURN_TYPES, ("STRING",))
+        self.assertEqual(GLMBBoxJSONProtectedExpand.RETURN_NAMES, ("bbox_json",))
+
+    def test_protected_expand_uses_percentages_and_splits_with_metadata(self):
+        image = torch.zeros((1, 100, 200, 3), dtype=torch.float32)
+        protected = '[{"desc":"keep","class":"protected","bbox":[95,0,105,100]}]'
+        targets = '[{"desc":"banner","class":"remove","bbox":[80,40,120,60]}]'
+        (result_json,) = GLMBBoxJSONProtectedExpand().expand_protected(
+            image,
+            protected,
+            targets,
+            horizontal_expand=10.0,
+            vertical_expand=10.0,
+        )
+        result = json.loads(result_json)
+        self.assertEqual(
+            result,
+            [
+                {"desc": "banner", "class": "remove", "bbox": [60, 30, 95, 70]},
+                {"desc": "banner", "class": "remove", "bbox": [105, 30, 140, 70]},
+            ],
+        )
+
+    def test_protected_expand_removes_existing_overlap_and_covered_target(self):
+        image = torch.zeros((1, 100, 100, 3), dtype=torch.float32)
+        node = GLMBBoxJSONProtectedExpand()
+        protected = '[{"bbox":[40,20,60,80]}]'
+        targets = '[{"desc":"b","class":"target","bbox":[30,30,70,70]}]'
+        (partial_json,) = node.expand_protected(image, protected, targets)
+        self.assertEqual(
+            json.loads(partial_json),
+            [
+                {"desc": "b", "class": "target", "bbox": [30, 30, 40, 70]},
+                {"desc": "b", "class": "target", "bbox": [60, 30, 70, 70]},
+            ],
+        )
+        (covered_json,) = node.expand_protected(image, '[{"bbox":[0,0,100,100]}]', targets)
+        self.assertEqual(json.loads(covered_json), [])
+
+    def test_protected_expand_supports_glm_1000_coordinates_and_aliases(self):
+        image = torch.zeros((1, 100, 200, 3), dtype=torch.float32)
+        protected = 'result:\n```json\n[{"description":"a","category":"keep","box":[450,0,550,1000]}]\n```'
+        targets = '{"results":[{"text":"b","type":"target","rect":[400,400,600,600]}]}'
+        (result_json,) = GLMBBoxJSONProtectedExpand().expand_protected(
+            image, protected, targets, coord_base=1000
+        )
+        self.assertEqual(
+            json.loads(result_json),
+            [
+                {"desc": "b", "class": "target", "bbox": [80, 40, 90, 60]},
+                {"desc": "b", "class": "target", "bbox": [110, 40, 120, 60]},
+            ],
+        )
+
+    def test_protected_expand_handles_empty_inputs_and_rejects_image_batch(self):
+        node = GLMBBoxJSONProtectedExpand()
+        image = torch.zeros((1, 20, 30, 3), dtype=torch.float32)
+        (empty_b,) = node.expand_protected(image, '[]', '[]', horizontal_expand=10)
+        self.assertEqual(json.loads(empty_b), [])
+        (empty_a,) = node.expand_protected(
+            image,
+            '[]',
+            '[{"desc":"b","class":"target","bbox":[10,5,20,15]}]',
+            horizontal_expand=10,
+            vertical_expand=10,
+        )
+        self.assertEqual(
+            json.loads(empty_a),
+            [{"desc": "b", "class": "target", "bbox": [7, 3, 23, 17]}],
+        )
+        with self.assertRaisesRegex(ValueError, "exactly one image"):
+            node.expand_protected(torch.zeros((2, 20, 30, 3)), '[]', '[]')
+
+    def test_protected_expand_is_registered(self):
+        from nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+
+        self.assertIs(NODE_CLASS_MAPPINGS["GLMBBoxJSONProtectedExpand"], GLMBBoxJSONProtectedExpand)
+        self.assertEqual(
+            NODE_DISPLAY_NAME_MAPPINGS["GLMBBoxJSONProtectedExpand"],
+            "GLM BBox JSON Protected Expand",
+        )
 
     def test_mask_inputs_use_coord_base_and_separate_percentage_expansion(self):
         required = GLMBBoxJSONToMask.INPUT_TYPES()["required"]

@@ -1,7 +1,12 @@
 ﻿import random
 import unittest
 
-from bbox_expand import expand_subset_bboxes, parse_ocr_bboxes, replace_ocr_bboxes
+from bbox_expand import (
+    expand_bboxes_excluding_protected_regions,
+    expand_subset_bboxes,
+    parse_ocr_bboxes,
+    replace_ocr_bboxes,
+)
 
 
 A_BOXES = [
@@ -310,6 +315,109 @@ class TestBBoxExpand(unittest.TestCase):
         polygon = [[(10, 10), (20, 10), (20, 30), (10, 30)]]
         expanded = expand_subset_bboxes(polygon, polygon, image_size=(100, 100), max_expand=5)
         self.assertEqual(expanded, [[5, 5, 25, 35]])
+
+    def test_protected_regions_split_expanded_target(self):
+        result = expand_bboxes_excluding_protected_regions(
+            [[45, 0, 55, 100]],
+            [[30, 30, 70, 70]],
+            image_size=(100, 100),
+            max_expand_x=10,
+            max_expand_y=10,
+        )
+        self.assertEqual(result, [[[20, 20, 45, 80], [55, 20, 80, 80]]])
+
+    def test_protected_regions_remove_existing_overlap_and_full_coverage(self):
+        partial = expand_bboxes_excluding_protected_regions(
+            [[40, 20, 60, 80]],
+            [[30, 30, 70, 70]],
+            image_size=(100, 100),
+        )
+        self.assertEqual(
+            partial,
+            [[[30, 30, 40, 70], [60, 30, 70, 70]]],
+        )
+        covered = expand_bboxes_excluding_protected_regions(
+            [[0, 0, 100, 100]],
+            [[30, 30, 70, 70]],
+            image_size=(100, 100),
+            max_expand_x=10,
+            max_expand_y=10,
+        )
+        self.assertEqual(covered, [[]])
+
+    def test_protected_regions_handle_diagonal_obstacle_and_safety_margin(self):
+        diagonal = expand_bboxes_excluding_protected_regions(
+            [[35, 35, 50, 50]],
+            [[20, 20, 30, 30]],
+            image_size=(100, 100),
+            max_expand_x=10,
+            max_expand_y=10,
+        )[0]
+        self.assertEqual(diagonal, [[10, 10, 40, 35], [10, 35, 35, 40]])
+        self.assertFalse(any(intersects(piece, [35, 35, 50, 50]) for piece in diagonal))
+
+        margin = expand_bboxes_excluding_protected_regions(
+            [[40, 10, 50, 30]],
+            [[20, 10, 30, 30]],
+            image_size=(100, 100),
+            max_expand_x=20,
+            safety_margin=5,
+        )
+        self.assertEqual(margin, [[[0, 10, 35, 30]]])
+
+    def test_protected_regions_are_order_independent_and_targets_do_not_block(self):
+        protected = [[20, 0, 30, 100], [70, 0, 80, 100]]
+        targets = [[40, 40, 50, 50], [45, 45, 55, 55]]
+        expected = expand_bboxes_excluding_protected_regions(
+            protected,
+            targets,
+            image_size=(100, 100),
+            max_expand_x=30,
+            max_expand_y=5,
+        )
+        reversed_a = expand_bboxes_excluding_protected_regions(
+            list(reversed(protected)),
+            targets,
+            image_size=(100, 100),
+            max_expand_x=30,
+            max_expand_y=5,
+        )
+        self.assertEqual(reversed_a, expected)
+        self.assertTrue(any(intersects(piece_1, piece_2) for piece_1 in expected[0] for piece_2 in expected[1]))
+
+    def test_protected_region_difference_matches_pixel_occupancy(self):
+        rng = random.Random(17)
+        for _ in range(50):
+            width = height = 8
+            bx1, by1 = rng.randrange(0, 6), rng.randrange(0, 6)
+            target = [bx1, by1, rng.randrange(bx1 + 1, 9), rng.randrange(by1 + 1, 9)]
+            protected = []
+            for _ in range(rng.randrange(0, 4)):
+                x1, y1 = rng.randrange(0, 8), rng.randrange(0, 8)
+                protected.append([x1, y1, rng.randrange(x1 + 1, 9), rng.randrange(y1 + 1, 9)])
+            expand_x, expand_y = rng.randrange(0, 3), rng.randrange(0, 3)
+            pieces = expand_bboxes_excluding_protected_regions(
+                protected,
+                [target],
+                image_size=(width, height),
+                max_expand_x=expand_x,
+                max_expand_y=expand_y,
+            )[0]
+            actual = {
+                (x, y)
+                for x1, y1, x2, y2 in pieces
+                for y in range(y1, y2)
+                for x in range(x1, x2)
+            }
+            ex1, ey1 = max(0, target[0] - expand_x), max(0, target[1] - expand_y)
+            ex2, ey2 = min(width, target[2] + expand_x), min(height, target[3] + expand_y)
+            expected = {
+                (x, y)
+                for y in range(ey1, ey2)
+                for x in range(ex1, ex2)
+                if not any(ax1 <= x < ax2 and ay1 <= y < ay2 for ax1, ay1, ax2, ay2 in protected)
+            }
+            self.assertEqual(actual, expected, (protected, target, pieces))
 
     def test_random_small_cases_match_edgewise_rule(self):
         rng = random.Random(7)

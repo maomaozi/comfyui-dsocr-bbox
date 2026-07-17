@@ -786,6 +786,88 @@ def expand_subset_bboxes(
     return expanded
 
 
+def _subtract_rect(source: Rect, protected: Rect) -> List[Rect]:
+    """Return a non-overlapping rectangular partition of ``source - protected``."""
+    if not source.intersects(protected):
+        return [source]
+
+    ix1 = max(source.x1, protected.x1)
+    iy1 = max(source.y1, protected.y1)
+    ix2 = min(source.x2, protected.x2)
+    iy2 = min(source.y2, protected.y2)
+    pieces = [
+        Rect(source.x1, source.y1, source.x2, iy1),
+        Rect(source.x1, iy2, source.x2, source.y2),
+        Rect(source.x1, iy1, ix1, iy2),
+        Rect(ix2, iy1, source.x2, iy2),
+    ]
+    return [piece for piece in pieces if piece.has_positive_area()]
+
+
+def expand_bboxes_excluding_protected_regions(
+    protected_boxes: Any,
+    target_boxes: Any,
+    *,
+    image_size: Tuple[int, int],
+    max_expand_x: int = 0,
+    max_expand_y: int = 0,
+    safety_margin: int = 0,
+) -> List[List[Box]]:
+    """Expand each target bbox, then remove every protected region.
+
+    All coordinates and expansion values are pixels. Each target is processed
+    independently and may produce zero or more rectangular fragments. Protected
+    boxes are sorted before subtraction so output is independent of their input
+    order. Rectangles use half-open coordinates, so edge contact is allowed.
+    """
+    width, height = int(image_size[0]), int(image_size[1])
+    if width <= 0 or height <= 0:
+        raise ValueError("image_size must contain positive width and height")
+
+    bounds = Rect(0.0, 0.0, float(width), float(height))
+    expand_x = max(0, int(round(max_expand_x or 0)))
+    expand_y = max(0, int(round(max_expand_y or 0)))
+    margin = max(0, int(round(safety_margin or 0)))
+
+    protected_rects: List[Rect] = []
+    for box in parse_ocr_bboxes(protected_boxes):
+        rect = Rect.from_box([int(round(value)) for value in box[:4]]).clipped(bounds)
+        rect = rect.expanded(margin).clipped(bounds)
+        if rect.has_positive_area():
+            protected_rects.append(rect)
+    protected_rects.sort(key=lambda rect: (rect.y1, rect.x1, rect.y2, rect.x2))
+
+    grouped_fragments: List[List[Box]] = []
+    for box in parse_ocr_bboxes(target_boxes):
+        base = Rect.from_box([int(round(value)) for value in box[:4]]).clipped(bounds)
+        if not base.has_positive_area():
+            grouped_fragments.append([])
+            continue
+
+        candidate = Rect(
+            base.x1 - expand_x,
+            base.y1 - expand_y,
+            base.x2 + expand_x,
+            base.y2 + expand_y,
+        ).clipped(bounds)
+        fragments = [candidate] if candidate.has_positive_area() else []
+        for protected in protected_rects:
+            fragments = [
+                piece
+                for fragment in fragments
+                for piece in _subtract_rect(fragment, protected)
+            ]
+            if not fragments:
+                break
+
+        fragments.sort(key=lambda rect: (rect.y1, rect.x1, rect.y2, rect.x2))
+        grouped_fragments.append(
+            [[int(rect.x1), int(rect.y1), int(rect.x2), int(rect.y2)] for rect in fragments]
+        )
+
+    return grouped_fragments
+
+
 # Backward-friendly alias with a more descriptive name.
 expand_ocr_subset_bboxes = expand_subset_bboxes
 
@@ -797,6 +879,7 @@ __all__ = [
     "format_det_box",
     "format_box_list",
     "replace_ocr_bboxes",
+    "expand_bboxes_excluding_protected_regions",
     "expand_subset_bboxes",
     "expand_ocr_subset_bboxes",
 ]

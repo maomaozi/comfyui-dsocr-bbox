@@ -14,11 +14,17 @@ import re
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 import torch
 from PIL import Image, ImageDraw
+
+try:
+    from .bbox_expand import expand_bboxes_excluding_protected_regions
+except ImportError:
+    from bbox_expand import expand_bboxes_excluding_protected_regions
 
 
 DEFAULT_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -432,6 +438,128 @@ class GLMVisionBBoxExtractor:
         return (result,)
 
 
+class GLMVisionBBoxDualExtractor:
+    """Process two image/prompt pairs concurrently with shared GLM settings."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image_1": ("IMAGE",),
+                "prompt_1": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT}),
+                "image_2": ("IMAGE",),
+                "prompt_2": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT}),
+                "endpoint": ("STRING", {"default": DEFAULT_ENDPOINT}),
+                "model": ("STRING", {"default": DEFAULT_MODEL}),
+                "api_key": ("STRING", {"default": "", "password": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("bbox_json_1", "bbox_json_2")
+    FUNCTION = "extract_dual"
+    CATEGORY = "dsocr_bbox/GLM Vision BBox"
+    DESCRIPTION = (
+        "Processes two image/prompt pairs concurrently through a shared configurable "
+        "GLM API and returns two strict pixel-coordinate bbox JSON lists."
+    )
+
+    def extract_dual(
+        self,
+        image_1: torch.Tensor,
+        prompt_1: str,
+        image_2: torch.Tensor,
+        prompt_2: str,
+        endpoint: str = DEFAULT_ENDPOINT,
+        model: str = DEFAULT_MODEL,
+        api_key: str = "",
+    ):
+        batch_1 = _normalize_image_batch(image_1)
+        batch_2 = _normalize_image_batch(image_2)
+        for slot, batch in enumerate((batch_1, batch_2), start=1):
+            if int(batch.shape[0]) != 1:
+                raise ValueError(
+                    "GLM Vision BBox Dual Extract requires exactly one image per input; "
+                    f"image_{slot} received batch size {batch.shape[0]}"
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_1 = executor.submit(
+                request_glm_bbox, batch_1[0], prompt_1, endpoint, model, api_key
+            )
+            future_2 = executor.submit(
+                request_glm_bbox, batch_2[0], prompt_2, endpoint, model, api_key
+            )
+            result_1 = future_1.result()
+            result_2 = future_2.result()
+        return result_1, result_2
+
+
+class GLMBBoxJSONProtectedExpand:
+    """Expand B by image percentages, then subtract all protected A regions."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        percentage = {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1}
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "bbox_json_a": ("STRING", {"forceInput": True}),
+                "bbox_json_b": ("STRING", {"forceInput": True}),
+                "horizontal_expand": ("FLOAT", percentage.copy()),
+                "vertical_expand": ("FLOAT", percentage.copy()),
+                "safety_margin": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "coord_base": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("bbox_json",)
+    FUNCTION = "expand_protected"
+    CATEGORY = "dsocr_bbox/GLM Vision BBox"
+    DESCRIPTION = (
+        "Expands every B bbox horizontally and vertically by image-size percentages, "
+        "then removes all protected A regions. A B record may split or disappear."
+    )
+
+    def expand_protected(
+        self,
+        image: torch.Tensor,
+        bbox_json_a: Any,
+        bbox_json_b: Any,
+        horizontal_expand: float = 0.0,
+        vertical_expand: float = 0.0,
+        safety_margin: int = 0,
+        coord_base: int = 0,
+    ):
+        batch = _normalize_image_batch(image)
+        if int(batch.shape[0]) != 1:
+            raise ValueError(
+                "GLM BBox JSON Protected Expand supports exactly one image, "
+                f"received batch size {batch.shape[0]}"
+            )
+        height, width = int(batch.shape[1]), int(batch.shape[2])
+        base = max(0, int(coord_base or 0))
+        records_a = parse_bbox_json(bbox_json_a, width=width, height=height, coord_base=base)
+        records_b = parse_bbox_json(bbox_json_b, width=width, height=height, coord_base=base)
+        expand_x = int(round(max(0.0, float(horizontal_expand or 0.0)) * float(width) / 100.0))
+        expand_y = int(round(max(0.0, float(vertical_expand or 0.0)) * float(height) / 100.0))
+        grouped_fragments = expand_bboxes_excluding_protected_regions(
+            [record["bbox"] for record in records_a],
+            [record["bbox"] for record in records_b],
+            image_size=(width, height),
+            max_expand_x=expand_x,
+            max_expand_y=expand_y,
+            safety_margin=max(0, int(safety_margin or 0)),
+        )
+
+        output: List[Dict[str, Any]] = []
+        for record, fragments in zip(records_b, grouped_fragments):
+            for bbox in fragments:
+                output.append({"desc": record["desc"], "class": record["class"], "bbox": bbox})
+        return (json.dumps(output, ensure_ascii=False, indent=2),)
+
+
 class GLMBBoxJSONToMask:
     """Rasterize GLM bbox JSON with horizontal and vertical percentage expansion."""
 
@@ -495,7 +623,9 @@ __all__ = [
     "DEFAULT_ENDPOINT",
     "DEFAULT_MODEL",
     "DEFAULT_PROMPT",
+    "GLMBBoxJSONProtectedExpand",
     "GLMBBoxJSONToMask",
+    "GLMVisionBBoxDualExtractor",
     "GLMVisionBBoxExtractor",
     "parse_bbox_json",
     "request_glm_bbox",

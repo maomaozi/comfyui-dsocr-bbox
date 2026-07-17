@@ -37,6 +37,39 @@ Markdown fences or surrounding prose accidentally emitted by a model are strippe
 Malformed items and invalid/zero-area boxes are omitted. The node rejects image batches
 larger than one because its API contract is one image per call.
 
+### GLM Vision BBox Dual Extractor
+
+Accepts two independent pairs, `image_1 + prompt_1` and `image_2 + prompt_2`, while
+sharing `endpoint`, `model`, and `api_key`. Both GLM requests run concurrently and the
+node returns `bbox_json_1` and `bbox_json_2` in input-slot order even if the second
+request finishes first. Each image input must contain exactly one image, and both inputs
+are validated before either request starts. If either request fails, the node raises the
+error and returns no partial output.
+
+Both outputs use the same validated, pretty-printed pixel-coordinate JSON format as the
+single-image extractor. The two concurrent requests may consume API capacity at the same
+time, and each request independently uses the existing retry behavior.
+
+### GLM BBox JSON Protected Expand
+
+Takes `bbox_json_a` as protected regions and `bbox_json_b` as regions to expand. Unlike
+the older A-B OCR nodes, every A bbox is protected; the node does not subtract matching
+B boxes from A. Each B bbox first expands left/right by `horizontal_expand` percent of
+the image width and top/bottom by `vertical_expand` percent of the image height, clipped
+to the image, then all A regions are removed from it. `safety_margin` additionally
+protects that many pixels around every A bbox.
+
+Existing B/A overlap is removed too. Consequently, one B record may split into several
+rectangles, each inheriting the original B `desc` and `class`; a fully covered B record
+disappears. Different B records are processed independently and do not block each other.
+Bboxes are half-open: touching an A edge is allowed, but positive-area overlap is never
+returned, including at diagonal corners.
+
+The default `coord_base=0` directly accepts pixel-coordinate output from either GLM
+extractor. Set it to `1000` only for raw GLM normalized grounding JSON. The output is a
+canonical pixel-coordinate GLM JSON list and can feed `GLM BBox JSON To Mask` with that
+node's `coord_base` set to `0`.
+
 ### GLM BBox JSON To Mask
 
 Consumes `bbox_json` plus the source `image`, and outputs a native ComfyUI `MASK`

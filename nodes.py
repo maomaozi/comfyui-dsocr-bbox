@@ -25,7 +25,12 @@ try:
         OCRBusinessReviewPrompt,
         OCRBusinessRuleClassifier,
     )
-    from .glm_vision_bbox import GLMBBoxJSONToMask, GLMVisionBBoxExtractor
+    from .glm_vision_bbox import (
+        GLMBBoxJSONProtectedExpand,
+        GLMBBoxJSONToMask,
+        GLMVisionBBoxDualExtractor,
+        GLMVisionBBoxExtractor,
+    )
 except Exception:
     from bbox_expand import expand_subset_bboxes, replace_ocr_bboxes
     from rapidocr_mask import RapidOCRDetectText, RapidOCRTextMask
@@ -43,7 +48,12 @@ except Exception:
         OCRBusinessReviewPrompt,
         OCRBusinessRuleClassifier,
     )
-    from glm_vision_bbox import GLMBBoxJSONToMask, GLMVisionBBoxExtractor
+    from glm_vision_bbox import (
+        GLMBBoxJSONProtectedExpand,
+        GLMBBoxJSONToMask,
+        GLMVisionBBoxDualExtractor,
+        GLMVisionBBoxExtractor,
+    )
 
 
 _REF_DET_RE = re.compile(
@@ -1322,6 +1332,8 @@ NODE_CLASS_MAPPINGS = {
     "OCRApplyBusinessDecisions": OCRApplyBusinessDecisions,
     "OCRBusinessRegionsToMask": OCRBusinessRegionsToMask,
     "GLMVisionBBoxExtractor": GLMVisionBBoxExtractor,
+    "GLMVisionBBoxDualExtractor": GLMVisionBBoxDualExtractor,
+    "GLMBBoxJSONProtectedExpand": GLMBBoxJSONProtectedExpand,
     "GLMBBoxJSONToMask": GLMBBoxJSONToMask,
 }
 
@@ -1342,5 +1354,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OCRApplyBusinessDecisions": "OCR Apply Business Decisions",
     "OCRBusinessRegionsToMask": "OCR Business Regions To Mask",
     "GLMVisionBBoxExtractor": "GLM Vision BBox Extractor",
+    "GLMVisionBBoxDualExtractor": "GLM Vision BBox Dual Extractor",
+    "GLMBBoxJSONProtectedExpand": "GLM BBox JSON Protected Expand",
     "GLMBBoxJSONToMask": "GLM BBox JSON To Mask",
 }
