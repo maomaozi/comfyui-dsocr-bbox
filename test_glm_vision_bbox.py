@@ -272,6 +272,10 @@ class TestGLMVisionBBox(unittest.TestCase):
         self.assertEqual(coord_input[0], "INT")
         self.assertEqual(coord_input[1]["default"], 1000)
         self.assertEqual(coord_input[1]["min"], 0)
+        self.assertEqual(
+            required["coordinate_order"][0],
+            ["x1,y1,x2,y2", "y1,x1,y2,x2"],
+        )
 
         for name in ("horizontal_expand", "vertical_expand"):
             expand_input = required[name]
@@ -283,6 +287,21 @@ class TestGLMVisionBBox(unittest.TestCase):
         image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
         bbox_json = '[{"desc":"店铺","class":"店铺","bbox":[100,250,300,500]}]'
         (mask,) = GLMBBoxJSONToMask().json_to_mask(image, bbox_json, horizontal_expand=0, vertical_expand=0)
+        self.assertEqual(mask[0, 20, 10].item(), 1.0)
+        self.assertEqual(mask[0, 39, 29].item(), 1.0)
+        self.assertEqual(mask[0, 19, 10].item(), 0.0)
+        self.assertEqual(mask[0, 40, 29].item(), 0.0)
+
+    def test_mask_accepts_y_first_coordinate_order(self):
+        image = torch.zeros((1, 80, 100, 3), dtype=torch.float32)
+        bbox_json = '[{"bbox":[250,100,500,300]}]'
+        (mask,) = GLMBBoxJSONToMask().json_to_mask(
+            image,
+            bbox_json,
+            horizontal_expand=0,
+            vertical_expand=0,
+            coordinate_order="y1,x1,y2,x2",
+        )
         self.assertEqual(mask[0, 20, 10].item(), 1.0)
         self.assertEqual(mask[0, 39, 29].item(), 1.0)
         self.assertEqual(mask[0, 19, 10].item(), 0.0)

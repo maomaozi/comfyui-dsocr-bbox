@@ -74,8 +74,9 @@ node's `coord_base` set to `0`.
 ### GLM BBox JSON To Mask
 
 Consumes `bbox_json` plus the source `image`, and outputs a native ComfyUI `MASK`
-(`float32`, `[batch,height,width]`). `coord_base` controls the input coordinate system:
-it defaults to `1000` for GLM normalized coordinates; set it to `0` when the JSON
+(`float32`, `[batch,height,width]`). `coordinate_order` switches between the default
+`[x1,y1,x2,y2]` format and `[y1,x1,y2,x2]`. `coord_base` controls the input coordinate
+system: it defaults to `1000` for GLM normalized coordinates; set it to `0` when the JSON
 already uses source-image pixel coordinates. The extractor above currently outputs
 pixel coordinates, so set `coord_base=0` when connecting these two nodes directly.
 `horizontal_expand` and `vertical_expand` are image-size percentages independent of

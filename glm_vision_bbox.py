@@ -243,11 +243,13 @@ def parse_bbox_json(
     width: int | None = None,
     height: int | None = None,
     coord_base: int = 0,
+    coordinate_order: str = "x1,y1,x2,y2",
 ) -> List[Dict[str, Any]]:
     """Extract and normalize ``desc/class/bbox`` records.
 
     ``coord_base=0`` means input coordinates are pixels.  A positive value,
     notably GLM grounding's native 1000, is converted to source-image pixels.
+    ``coordinate_order`` accepts either x-first or y-first bbox coordinates.
     """
     if isinstance(text_or_value, str):
         raw_items = None
@@ -269,6 +271,8 @@ def parse_bbox_json(
         bbox = _bbox_values(item.get("bbox", item.get("box", item.get("rect"))))
         if bbox is None:
             continue
+        if coordinate_order == "y1,x1,y2,x2":
+            bbox = [bbox[1], bbox[0], bbox[3], bbox[2]]
         normalized = _normalize_bbox(bbox, width, height, coord_base=coord_base)
         if normalized is None:
             continue
@@ -577,6 +581,7 @@ class GLMBBoxJSONToMask:
                 "horizontal_expand": ("FLOAT", percentage.copy()),
                 "vertical_expand": ("FLOAT", percentage.copy()),
                 "coord_base": ("INT", {"default": 1000, "min": 0, "max": 100000, "step": 1}),
+                "coordinate_order": (["x1,y1,x2,y2", "y1,x1,y2,x2"],),
             }
         }
 
@@ -585,8 +590,8 @@ class GLMBBoxJSONToMask:
     FUNCTION = "json_to_mask"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. Coordinates use "
-        "coord_base (0 means pixels); horizontal_expand and vertical_expand are image-size percentages."
+        "Converts GLM desc/class/bbox JSON to a native ComfyUI MASK. coordinate_order selects "
+        "x-first or y-first bbox values; coord_base 0 means pixels; expansion values are image-size percentages."
     )
 
     def json_to_mask(
@@ -596,11 +601,18 @@ class GLMBBoxJSONToMask:
         horizontal_expand: float = 0.0,
         vertical_expand: float = 0.0,
         coord_base: int = 1000,
+        coordinate_order: str = "x1,y1,x2,y2",
     ):
         batch = _normalize_image_batch(image)
         batch_size, height, width = int(batch.shape[0]), int(batch.shape[1]), int(batch.shape[2])
         base = max(0, int(coord_base or 0))
-        records = parse_bbox_json(bbox_json, width=width, height=height, coord_base=base)
+        records = parse_bbox_json(
+            bbox_json,
+            width=width,
+            height=height,
+            coord_base=base,
+            coordinate_order=coordinate_order,
+        )
         horizontal_percent = max(0.0, float(horizontal_expand or 0.0))
         vertical_percent = max(0.0, float(vertical_expand or 0.0))
         padding_x = int(round(horizontal_percent * float(width) / 100.0))
