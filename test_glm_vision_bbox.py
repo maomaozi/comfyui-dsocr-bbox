@@ -6,6 +6,8 @@ from unittest.mock import patch
 import torch
 
 from glm_vision_bbox import (
+    DEFAULT_ENDPOINT,
+    DEFAULT_MODEL,
     GLMBBoxJSONProtectedExpand,
     GLMBBoxJSONToMask,
     GLMVisionBBoxDualExtractor,
@@ -50,12 +52,27 @@ class TestGLMVisionBBox(unittest.TestCase):
         required = GLMVisionBBoxDualExtractor.INPUT_TYPES()["required"]
         self.assertEqual(
             tuple(required),
-            ("image_1", "prompt_1", "image_2", "prompt_2", "endpoint", "model", "api_key"),
+            (
+                "image_1",
+                "prompt_1",
+                "image_2",
+                "prompt_2",
+                "endpoint_1",
+                "model",
+                "api_key_1",
+                "endpoint_2",
+                "api_key_2",
+            ),
         )
         self.assertEqual(required["image_1"], ("IMAGE",))
         self.assertEqual(required["image_2"], ("IMAGE",))
         self.assertTrue(required["prompt_1"][1]["multiline"])
         self.assertTrue(required["prompt_2"][1]["multiline"])
+        self.assertEqual(required["endpoint_1"][1]["default"], DEFAULT_ENDPOINT)
+        self.assertEqual(required["endpoint_2"][1]["default"], DEFAULT_ENDPOINT)
+        self.assertEqual(required["model"][1]["default"], DEFAULT_MODEL)
+        self.assertEqual(required["api_key_1"][1], {"default": "", "password": True})
+        self.assertEqual(required["api_key_2"][1], {"default": "", "password": True})
         self.assertEqual(GLMVisionBBoxDualExtractor.RETURN_TYPES, ("STRING", "STRING"))
         self.assertEqual(GLMVisionBBoxDualExtractor.RETURN_NAMES, ("bbox_json_1", "bbox_json_2"))
 
@@ -83,20 +100,34 @@ class TestGLMVisionBBox(unittest.TestCase):
                 "first prompt",
                 image_2,
                 "second prompt",
-                endpoint="https://example.test/v1",
-                model="test-model",
-                api_key="secret",
+                endpoint_1="https://lane-1.example.test/v1",
+                model="shared-test-model",
+                api_key_1="lane-one-key",
+                endpoint_2="https://lane-2.example.test/v1",
+                api_key_2="lane-two-key",
             )
 
         self.assertEqual(result, ("json-one", "json-two"))
         self.assertEqual(request_mock.call_count, 2)
         self.assertEqual(
             calls["first prompt"],
-            ((2, 3, 3), image_1[0, 0, 0, 0].item(), "https://example.test/v1", "test-model", "secret"),
+            (
+                (2, 3, 3),
+                image_1[0, 0, 0, 0].item(),
+                "https://lane-1.example.test/v1",
+                "shared-test-model",
+                "lane-one-key",
+            ),
         )
         self.assertEqual(
             calls["second prompt"],
-            ((4, 5, 3), image_2[0, 0, 0, 0].item(), "https://example.test/v1", "test-model", "secret"),
+            (
+                (4, 5, 3),
+                image_2[0, 0, 0, 0].item(),
+                "https://lane-2.example.test/v1",
+                "shared-test-model",
+                "lane-two-key",
+            ),
         )
 
     def test_dual_extractor_validates_both_batches_before_requests(self):

@@ -39,16 +39,17 @@ larger than one because its API contract is one image per call.
 
 ### GLM Vision BBox Dual Extractor
 
-Accepts two independent pairs, `image_1 + prompt_1` and `image_2 + prompt_2`, while
-sharing `endpoint`, `model`, and `api_key`. Both GLM requests run concurrently and the
-node returns `bbox_json_1` and `bbox_json_2` in input-slot order even if the second
-request finishes first. Each image input must contain exactly one image, and both inputs
-are validated before either request starts. If either request fails, the node raises the
-error and returns no partial output.
+Accepts two independent pairs, `image_1 + prompt_1` and `image_2 + prompt_2`. The
+first request uses `endpoint_1 + api_key_1`, the second uses `endpoint_2 + api_key_2`,
+and both share `model`. Both GLM requests run concurrently, and the node returns
+`bbox_json_1` and `bbox_json_2` in input-slot order even if the second request finishes
+first. Each image input must contain exactly one image, and both inputs are validated
+before either request starts. If either request fails, the node raises the error and
+returns no partial output.
 
 Both outputs use the same validated, pretty-printed pixel-coordinate JSON format as the
-single-image extractor. The two concurrent requests may consume API capacity at the same
-time, and each request independently uses the existing retry behavior.
+single-image extractor. The concurrent requests may consume each endpoint's API capacity
+at the same time, and each endpoint independently uses the existing retry behavior.
 
 ### GLM BBox JSON Protected Expand
 

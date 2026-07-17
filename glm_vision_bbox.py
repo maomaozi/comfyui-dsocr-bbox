@@ -439,7 +439,7 @@ class GLMVisionBBoxExtractor:
 
 
 class GLMVisionBBoxDualExtractor:
-    """Process two image/prompt pairs concurrently with shared GLM settings."""
+    """Process two image/prompt pairs concurrently with separate endpoints and keys."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -449,9 +449,11 @@ class GLMVisionBBoxDualExtractor:
                 "prompt_1": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT}),
                 "image_2": ("IMAGE",),
                 "prompt_2": ("STRING", {"multiline": True, "default": DEFAULT_PROMPT}),
-                "endpoint": ("STRING", {"default": DEFAULT_ENDPOINT}),
+                "endpoint_1": ("STRING", {"default": DEFAULT_ENDPOINT}),
                 "model": ("STRING", {"default": DEFAULT_MODEL}),
-                "api_key": ("STRING", {"default": "", "password": True}),
+                "api_key_1": ("STRING", {"default": "", "password": True}),
+                "endpoint_2": ("STRING", {"default": DEFAULT_ENDPOINT}),
+                "api_key_2": ("STRING", {"default": "", "password": True}),
             }
         }
 
@@ -460,8 +462,8 @@ class GLMVisionBBoxDualExtractor:
     FUNCTION = "extract_dual"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Processes two image/prompt pairs concurrently through a shared configurable "
-        "GLM API and returns two strict pixel-coordinate bbox JSON lists."
+        "Processes two image/prompt pairs concurrently with separate endpoints and API "
+        "keys, a shared model, and input-ordered pixel-coordinate bbox JSON outputs."
     )
 
     def extract_dual(
@@ -470,9 +472,11 @@ class GLMVisionBBoxDualExtractor:
         prompt_1: str,
         image_2: torch.Tensor,
         prompt_2: str,
-        endpoint: str = DEFAULT_ENDPOINT,
+        endpoint_1: str = DEFAULT_ENDPOINT,
         model: str = DEFAULT_MODEL,
-        api_key: str = "",
+        api_key_1: str = "",
+        endpoint_2: str = DEFAULT_ENDPOINT,
+        api_key_2: str = "",
     ):
         batch_1 = _normalize_image_batch(image_1)
         batch_2 = _normalize_image_batch(image_2)
@@ -485,10 +489,10 @@ class GLMVisionBBoxDualExtractor:
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_1 = executor.submit(
-                request_glm_bbox, batch_1[0], prompt_1, endpoint, model, api_key
+                request_glm_bbox, batch_1[0], prompt_1, endpoint_1, model, api_key_1
             )
             future_2 = executor.submit(
-                request_glm_bbox, batch_2[0], prompt_2, endpoint, model, api_key
+                request_glm_bbox, batch_2[0], prompt_2, endpoint_2, model, api_key_2
             )
             result_1 = future_1.result()
             result_2 = future_2.result()
