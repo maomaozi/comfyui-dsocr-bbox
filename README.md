@@ -19,23 +19,25 @@ OpenAI-compatible vision chat-completions API. Defaults:
 - `model`: `glm-4.6v-flash`
 - `api_key`: entered on the node; no key is stored in this repository
 
-The prompt can be entered directly on the node. The node asks GLM for its native
-`0-1000` visual-grounding coordinates, validates the response, converts coordinates
-to source-image pixels, clamps them to the image, and outputs only normalized JSON:
+The prompt can be entered directly on the node and controls the bbox coordinate base
+and order. The extractor strips Markdown fences or surrounding prose, keeps only
+`desc`, `class`, and `bbox`, and preserves the model's first four numeric bbox values in
+their original sequence. It does not scale, swap, sort, clamp, or round coordinates, so
+downstream nodes must be configured to match the prompt's coordinate rules:
 
 ```json
 [
   {
     "desc": "official flagship store",
     "class": "store",
-    "bbox": [x1, y1, x2, y2]
+    "bbox": [900, 800.25, 100, -3]
   }
 ]
 ```
 
-Markdown fences or surrounding prose accidentally emitted by a model are stripped.
-Malformed items and invalid/zero-area boxes are omitted. The node rejects image batches
-larger than one because its API contract is one image per call.
+Malformed items are omitted, but zero-area, reversed, negative, fractional, and
+out-of-image coordinates are retained for downstream interpretation. The node rejects
+image batches larger than one because its API contract is one image per call.
 
 ### GLM Vision BBox Dual Extractor
 
@@ -47,9 +49,10 @@ first. Each image input must contain exactly one image, and both inputs are vali
 before either request starts. If either request fails, the node raises the error and
 returns no partial output.
 
-Both outputs use the same validated, pretty-printed pixel-coordinate JSON format as the
-single-image extractor. The concurrent requests may consume each endpoint's API capacity
-at the same time, and each endpoint independently uses the existing retry behavior.
+Both outputs use the same cleaned, pretty-printed, coordinate-preserving JSON format as
+the single-image extractor. The concurrent requests may consume each endpoint's API
+capacity at the same time, and each endpoint independently uses the existing retry
+behavior.
 
 ### GLM BBox JSON Protected Expand
 
@@ -66,19 +69,19 @@ disappears. Different B records are processed independently and do not block eac
 Bboxes are half-open: touching an A edge is allowed, but positive-area overlap is never
 returned, including at diagonal corners.
 
-The default `coord_base=0` directly accepts pixel-coordinate output from either GLM
-extractor. Set it to `1000` only for raw GLM normalized grounding JSON. The output is a
-canonical pixel-coordinate GLM JSON list and can feed `GLM BBox JSON To Mask` with that
-node's `coord_base` set to `0`.
+Set `coord_base` to match the coordinate base requested in the extractor prompt: use `0`
+for pixels or a positive normalization base such as `1000`. This node currently expects
+`[x1,y1,x2,y2]` input. Its output is a canonical pixel-coordinate GLM JSON list and can
+feed `GLM BBox JSON To Mask` with that node's `coord_base=0` and x-first order.
 
 ### GLM BBox JSON To Mask
 
 Consumes `bbox_json` plus the source `image`, and outputs a native ComfyUI `MASK`
 (`float32`, `[batch,height,width]`). `coordinate_order` switches between the default
 `[x1,y1,x2,y2]` format and `[y1,x1,y2,x2]`. `coord_base` controls the input coordinate
-system: it defaults to `1000` for GLM normalized coordinates; set it to `0` when the JSON
-already uses source-image pixel coordinates. The extractor above currently outputs
-pixel coordinates, so set `coord_base=0` when connecting these two nodes directly.
+system: it defaults to `1000` for normalized coordinates; set it to `0` when the JSON
+uses source-image pixels. When connecting an extractor directly, set `coord_base` and
+`coordinate_order` to the coordinate rules requested by that extractor's prompt.
 `horizontal_expand` and `vertical_expand` are image-size percentages independent of
 `coord_base`. For example, `horizontal_expand=10` expands the bbox by 10% of the image
 width on both the left and right, while `vertical_expand=5` expands it by 5% of the

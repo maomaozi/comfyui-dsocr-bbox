@@ -1,8 +1,9 @@
 """ComfyUI nodes for GLM vision bbox extraction and JSON bbox masks.
 
 The API node uses the OpenAI-compatible Zhipu chat completions endpoint and
-returns a strict JSON list with pixel-coordinate bboxes.  The mask node consumes
-that list and expands every rectangle by a percentage of the image dimensions.
+returns a cleaned JSON list while preserving the model's bbox coordinates. The
+mask node interprets those coordinates and expands every rectangle by a
+percentage of the image dimensions.
 """
 
 from __future__ import annotations
@@ -194,7 +195,7 @@ def _unwrap_result_list(value: Any) -> List[Any] | None:
     return None
 
 
-def _bbox_values(value: Any) -> List[float] | None:
+def _bbox_values(value: Any, preserve_types: bool = False) -> List[float] | List[int | float] | None:
     if isinstance(value, str):
         numbers = _NUMBER_RE.findall(value)
         if len(numbers) >= 4:
@@ -203,7 +204,46 @@ def _bbox_values(value: Any) -> List[float] | None:
         return None
     if not all(isinstance(number, (int, float)) and not isinstance(number, bool) for number in value[:4]):
         return None
+    if preserve_types:
+        return list(value[:4])
     return [float(number) for number in value[:4]]
+
+
+def _clean_bbox_json(text_or_value: Any) -> List[Dict[str, Any]]:
+    """Clean bbox records without changing coordinate values or order."""
+    if isinstance(text_or_value, str):
+        raw_items = None
+        for candidate in _decoded_json_candidates(text_or_value):
+            raw_items = _unwrap_result_list(candidate)
+            if raw_items is not None:
+                break
+        if raw_items is None:
+            raise ValueError("GLM response does not contain a JSON list or bbox object")
+    else:
+        raw_items = _unwrap_result_list(text_or_value)
+        if raw_items is None:
+            raise ValueError("BBox JSON must be a list or an object containing a bbox")
+
+    output: List[Dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        bbox = _bbox_values(
+            item.get("bbox", item.get("box", item.get("rect"))),
+            preserve_types=True,
+        )
+        if bbox is None:
+            continue
+        desc = item.get("desc", item.get("description", item.get("text", item.get("label", ""))))
+        class_name = item.get("class", item.get("category", item.get("type", "")))
+        output.append(
+            {
+                "desc": "" if desc is None else str(desc),
+                "class": "" if class_name is None else str(class_name),
+                "bbox": bbox,
+            }
+        )
+    return output
 
 
 def _normalize_bbox(
@@ -251,40 +291,15 @@ def parse_bbox_json(
     notably GLM grounding's native 1000, is converted to source-image pixels.
     ``coordinate_order`` accepts either x-first or y-first bbox coordinates.
     """
-    if isinstance(text_or_value, str):
-        raw_items = None
-        for candidate in _decoded_json_candidates(text_or_value):
-            raw_items = _unwrap_result_list(candidate)
-            if raw_items is not None:
-                break
-        if raw_items is None:
-            raise ValueError("GLM response does not contain a JSON list or bbox object")
-    else:
-        raw_items = _unwrap_result_list(text_or_value)
-        if raw_items is None:
-            raise ValueError("BBox JSON must be a list or an object containing a bbox")
-
     output: List[Dict[str, Any]] = []
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        bbox = _bbox_values(item.get("bbox", item.get("box", item.get("rect"))))
-        if bbox is None:
-            continue
+    for item in _clean_bbox_json(text_or_value):
+        bbox = item["bbox"]
         if coordinate_order == "y1,x1,y2,x2":
             bbox = [bbox[1], bbox[0], bbox[3], bbox[2]]
         normalized = _normalize_bbox(bbox, width, height, coord_base=coord_base)
         if normalized is None:
             continue
-        desc = item.get("desc", item.get("description", item.get("text", item.get("label", ""))))
-        class_name = item.get("class", item.get("category", item.get("type", "")))
-        output.append(
-            {
-                "desc": "" if desc is None else str(desc),
-                "class": "" if class_name is None else str(class_name),
-                "bbox": normalized,
-            }
-        )
+        output.append({"desc": item["desc"], "class": item["class"], "bbox": normalized})
     return output
 
 
@@ -292,12 +307,10 @@ def _build_api_prompt(user_prompt: str) -> str:
     return f"""{user_prompt.strip()}
 
 强制要求：
-1. bbox 使用 GLM 视觉定位的 0-1000 归一化坐标，左上角为 (0,0)，右下角为 (1000,1000)。
-2. 坐标必须满足 0 <= x1 < x2 <= 1000，0 <= y1 < y2 <= 1000。
-3. 每个元素只保留 desc、class、bbox 三个字段。
-4. 用户提示词中的 JSON/“官方旗舰店”仅是输出结构示例，不代表图中真实内容；禁止照抄示例，必须以图片为准。
-5. 严格按照用户指定的目标范围检测；如果用户列出了类别，只输出这些类别，不要自行加入无关的产品、规格或功能类别。
-6. 最终只输出合法 JSON list；不要 Markdown 代码块、解释、前后缀或其他格式。"""
+1. 每个元素只保留 desc、class、bbox 三个字段。
+2. 用户提示词中的 JSON/“官方旗舰店”仅是输出结构示例，不代表图中真实内容；禁止照抄示例，必须以图片为准。
+3. 严格按照用户指定的目标范围和坐标规则检测；如果用户列出了类别，只输出这些类别，不要自行加入无关的产品、规格或功能类别。
+4. 最终只输出合法 JSON list；不要 Markdown 代码块、解释、前后缀或其他格式。"""
 
 
 def request_glm_bbox(
@@ -308,7 +321,7 @@ def request_glm_bbox(
     api_key: str,
     timeout: int = 300,
 ) -> str:
-    """Call GLM and return a normalized, pretty-printed JSON list."""
+    """Call GLM and return cleaned JSON without changing bbox coordinates."""
     endpoint = str(endpoint or "").strip()
     model = str(model or "").strip()
     api_key = str(api_key or "").strip()
@@ -322,7 +335,7 @@ def request_glm_bbox(
     if not prompt:
         raise ValueError("prompt cannot be empty")
 
-    image_base64, width, height = _image_as_base64_png(image)
+    image_base64, _, _ = _image_as_base64_png(image)
     payload = {
         "model": model,
         "messages": [
@@ -397,7 +410,7 @@ def request_glm_bbox(
     raw_text = _content_as_text(message.get("content"))
     if not raw_text:
         raw_text = _content_as_text(message.get("reasoning_content"))
-    records = parse_bbox_json(raw_text, width=width, height=height, coord_base=1000)
+    records = _clean_bbox_json(raw_text)
     return json.dumps(records, ensure_ascii=False, indent=2)
 
 
@@ -421,8 +434,8 @@ class GLMVisionBBoxExtractor:
     FUNCTION = "extract"
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
-        "Calls a configurable GLM vision chat-completions API for one image and "
-        "returns a strict JSON list containing desc, class, and pixel bbox."
+        "Calls a configurable GLM vision chat-completions API for one image and returns "
+        "clean desc/class/bbox JSON while preserving bbox values and coordinate order."
     )
 
     def extract(
@@ -467,7 +480,7 @@ class GLMVisionBBoxDualExtractor:
     CATEGORY = "dsocr_bbox/GLM Vision BBox"
     DESCRIPTION = (
         "Processes two image/prompt pairs concurrently with separate endpoints and API "
-        "keys, a shared model, and input-ordered pixel-coordinate bbox JSON outputs."
+        "keys, preserving each response's bbox values and coordinate order."
     )
 
     def extract_dual(

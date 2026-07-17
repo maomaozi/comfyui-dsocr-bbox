@@ -12,6 +12,7 @@ from glm_vision_bbox import (
     GLMBBoxJSONToMask,
     GLMVisionBBoxDualExtractor,
     parse_bbox_json,
+    request_glm_bbox,
 )
 
 
@@ -47,6 +48,64 @@ class TestGLMVisionBBox(unittest.TestCase):
         source = '[{"desc":"店铺","class":"店铺","bbox":[802,696,938,811]}]'
         result = parse_bbox_json(source, width=472, height=466, coord_base=1000)
         self.assertEqual(result[0]["bbox"], [379, 324, 443, 378])
+
+    def test_request_preserves_bbox_coordinates_and_prompt_rules(self):
+        model_content = """result:
+```json
+{
+  "results": [
+    {"description":"banner","category":"promo","box":[900,800.25,100,-3]},
+    {"text":"line","type":"zero","rect":[5,6,5,6]},
+    {"desc":"invalid","class":"skip","bbox":[1,true,3,4]}
+  ]
+}
+```
+"""
+        response_body = json.dumps(
+            {"choices": [{"message": {"content": model_content}}]},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+            def read(self):
+                return response_body
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        image = torch.zeros((1024, 768, 3), dtype=torch.float32)
+        with patch("glm_vision_bbox.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = request_glm_bbox(
+                image,
+                "请输出像素坐标，顺序为 [y1,x1,y2,x2]。",
+                "https://example.test/v1",
+                "test-model",
+                "test-key",
+            )
+
+        self.assertEqual(
+            json.loads(result),
+            [
+                {"desc": "banner", "class": "promo", "bbox": [900, 800.25, 100, -3]},
+                {"desc": "line", "class": "zero", "bbox": [5, 6, 5, 6]},
+            ],
+        )
+        prompt = captured["payload"]["messages"][0]["content"][1]["text"]
+        self.assertIn("请输出像素坐标，顺序为 [y1,x1,y2,x2]。", prompt)
+        self.assertIn("每个元素只保留 desc、class、bbox 三个字段", prompt)
+        self.assertIn("严格按照用户指定的目标范围和坐标规则检测", prompt)
+        self.assertNotIn("0-1000 归一化坐标", prompt)
+        self.assertNotIn("0 <= x1 < x2", prompt)
+        self.assertEqual(captured["timeout"], 300)
 
     def test_dual_extractor_schema(self):
         required = GLMVisionBBoxDualExtractor.INPUT_TYPES()["required"]
